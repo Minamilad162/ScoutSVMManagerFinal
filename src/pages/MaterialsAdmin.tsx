@@ -127,7 +127,7 @@ export default function MaterialsAdmin() {
       if (se) throw se
       if (ze) throw ze
       setImagesEnabled(imageCatalog.enabled)
-      setMaterials(((mats as Material[]) ?? []).map((m) => ({ ...m, image_path: imageCatalog.paths.get(m.id) || null })))
+      setMaterials(((mats as any[]) ?? []).map((m) => ({ ...m, image_path: imageCatalog.paths.get(m.id) || null })))
       setStorLocs((sl as any) ?? [])
       setZones((zs as any) ?? [])
     } catch (e: any) {
