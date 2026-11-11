@@ -8,6 +8,7 @@ import { MetricCard } from '../components/ui/MetricCard'
 import { PageHero } from '../components/ui/PageHero'
 import { SectionCard } from '../components/ui/SectionCard'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { clampDateToBounds, getScoutYearBounds, inDateBounds } from '../lib/scoutYearScope'
 
 type EventRow = {
   id: string
@@ -33,8 +34,9 @@ export default function AdminEvents() {
   const [rows, setRows] = useState<EventRow[]>([])
 
   useEffect(() => {
-    void init()
-  }, [])
+    if (currentScoutYear?.id) void init()
+    else setRows([])
+  }, [currentScoutYear?.id])
 
   async function init() {
     setLoading(true)
@@ -43,7 +45,8 @@ export default function AdminEvents() {
       now.setDate(now.getDate() + 3)
       now.setHours(18, 0, 0, 0)
       const pad = (n: number) => String(n).padStart(2, '0')
-      setWhen(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`)
+      const day = clampDateToBounds(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`, getScoutYearBounds(currentScoutYear))
+      setWhen(`${day}T${pad(now.getHours())}:${pad(now.getMinutes())}`)
 
       await refresh()
     } catch (e: any) {
@@ -68,6 +71,7 @@ export default function AdminEvents() {
   async function save() {
     if (!title.trim()) return toast.error('أدخل عنوان الفعالية')
     if (!when) return toast.error('اختر الموعد')
+    if (!inDateBounds(when, getScoutYearBounds(currentScoutYear))) return toast.error('موعد الفعالية خارج السنة الكشفية المختارة')
 
     setSaving(true)
     try {
@@ -141,7 +145,7 @@ export default function AdminEvents() {
           </div>
           <div className="min-w-0">
             <label className="mb-1 block text-sm font-medium text-slate-700">الموعد</label>
-            <input type="datetime-local" className="w-full rounded-2xl border border-slate-300 px-3 py-2" value={when} onChange={(e) => setWhen(e.target.value)} />
+            <input type="datetime-local" className="w-full rounded-2xl border border-slate-300 px-3 py-2" value={when} min={getScoutYearBounds(currentScoutYear) ? `${getScoutYearBounds(currentScoutYear)!.start}T00:00` : undefined} max={getScoutYearBounds(currentScoutYear) ? `${getScoutYearBounds(currentScoutYear)!.end}T23:59` : undefined} onChange={(e) => setWhen(e.target.value)} />
           </div>
           <div className="md:col-span-2 min-w-0">
             <label className="mb-1 block text-sm font-medium text-slate-700">المكان</label>

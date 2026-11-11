@@ -108,7 +108,6 @@ export async function fetchReportCenterData(options: {
   const { teamId, termId, scoutYearId, scoutYearStart, scoutYearEnd } = options
   const terms = await fetchTerms()
   const currentTerms = terms.filter((term) => term.scout_year_id === scoutYearId)
-  const allowedTermIds = currentTerms.map((term) => term.id)
   const filteredTerms = termId ? currentTerms.filter((term) => term.id === termId) : currentTerms
   const filteredTermIds = filteredTerms.map((term) => term.id)
   const termMap = new Map(currentTerms.map((term) => [term.id, term]))
@@ -118,7 +117,7 @@ export async function fetchReportCenterData(options: {
 
   // ===== الميزانية =====
   let budgetReq = supabase
-    .from('team_budgets')
+    .from('v_team_budgets_effective')
     .select('team_id, term_id, amount_total')
     .eq('team_id', teamId)
     .is('soft_deleted_at', null)
@@ -129,13 +128,13 @@ export async function fetchReportCenterData(options: {
     .eq('team_id', teamId)
     .is('soft_deleted_at', null)
 
-  if (filteredTermIds.length) {
-    budgetReq = budgetReq.in('term_id', filteredTermIds)
-    expensesReq = expensesReq.in('term_id', filteredTermIds)
-  } else if (allowedTermIds.length) {
-    budgetReq = budgetReq.in('term_id', allowedTermIds)
-    expensesReq = expensesReq.in('term_id', allowedTermIds)
-  }
+  // The empty set must not become an all-years finance query.
+  // A requested term from another year must not fall back to all current terms.
+  const scopedIds = filteredTermIds.length ? filteredTermIds : ['00000000-0000-0000-0000-000000000000']
+  budgetReq = budgetReq.in('term_id', scopedIds)
+  expensesReq = expensesReq.in('term_id', scopedIds)
+    .gte('expense_date', reportRangeStart > scoutYearStart ? reportRangeStart : scoutYearStart)
+    .lte('expense_date', reportRangeEnd < scoutYearEnd ? reportRangeEnd : scoutYearEnd)
 
   const [{ data: budgetRowsRaw, error: budgetError }, { data: expenseRowsRaw, error: expenseError }] = await Promise.all([
     budgetReq,
@@ -334,8 +333,8 @@ export async function fetchReportCenterData(options: {
       .eq('team_id', teamId)
       .in('evaluatee_member_id', eligibleMemberIds)
 
-    if (filteredTermIds.length) evalReq = evalReq.in('term_id', filteredTermIds)
-    else if (allowedTermIds.length) evalReq = evalReq.in('term_id', allowedTermIds)
+    // An empty selected Scout Year/term set must match no evaluations.
+    evalReq = evalReq.in('term_id', scopedIds)
 
     const { data: evaluationRowsRaw, error: evaluationsError } = await evalReq
     if (evaluationsError) throw evaluationsError

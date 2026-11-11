@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { getScoutYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { safeWriteAuditLog } from '../features/audit/api'
 import { buildFieldReservationSummary } from '../features/audit/humanize'
 import { InlineAlert } from '../components/ui/InlineAlert'
@@ -44,6 +45,7 @@ type FieldRes = {
 export default function Materials() {
   const { myTeamId, roles, user } = useAuth()
   const { currentScoutYear } = useScoutYear()
+  const yearBounds = getScoutYearBounds(currentScoutYear)
   const [tab, setTab] = useState<'reservations'|'inventory'|'field'|'locations'>('reservations')
 
   const isAdmin = useMemo(() => roles.some(r => r.role_slug === 'admin'), [roles])
@@ -89,7 +91,7 @@ export default function Materials() {
       loadFieldZones()
       loadFieldRes()
     }
-  }, [myTeamId])
+  }, [myTeamId, currentScoutYear?.id])
 
   // ---------- Loaders ----------
   async function loadInventory() {
@@ -120,11 +122,13 @@ export default function Materials() {
   }
 
   async function loadMatReservations() {
-    if (!myTeamId) return
+    if (!myTeamId || !yearBounds) { setRes([]); return }
     const { data, error } = await supabase
       .from('material_reservations')
       .select('id, material_id, team_id, qty, starts_at, ends_at, created_at, soft_deleted_at, materials(name, storage_location_id, storage_locations(name))')
       .eq('team_id', myTeamId)
+      .gte('starts_at', `${yearBounds.start}T00:00:00`)
+      .lte('starts_at', `${yearBounds.end}T23:59:59`)
       .is('soft_deleted_at', null)
       .order('starts_at', { ascending: false })
       .limit(100)
@@ -155,11 +159,13 @@ export default function Materials() {
   }
 
   async function loadFieldRes() {
-    if (!myTeamId) return
+    if (!myTeamId || !yearBounds) { setFres([]); return }
     const { data, error } = await supabase
       .from('field_reservations')
       .select('id, field_zone_id, team_id, starts_at, ends_at, soft_deleted_at, field_zones(name)')
       .eq('team_id', myTeamId)
+      .gte('starts_at', `${yearBounds.start}T00:00:00`)
+      .lte('starts_at', `${yearBounds.end}T23:59:59`)
       .is('soft_deleted_at', null)
       .order('starts_at', { ascending: false })
       .limit(100)
@@ -254,6 +260,7 @@ export default function Materials() {
     if (!canReserve || !myTeamId) { setErr('لا يمكن الحجز بدون فريق'); return }
     if (!resMaterialId) { setErr('اختر الأداة'); return }
     if (!resStart || !resEnd) { setErr('اختر وقت البداية والنهاية'); return }
+    if (!inDateBounds(resStart, yearBounds) || !inDateBounds(resEnd, yearBounds) || resEnd <= resStart) { setErr('الحجز خارج نطاق السنة الكشفية أو التواريخ غير مرتبة'); return }
     const payload = {
       material_id: resMaterialId,
       team_id: myTeamId,
@@ -282,6 +289,7 @@ export default function Materials() {
     if (!canReserve || !myTeamId) { setErr('لا يمكن الحجز بدون فريق'); return }
     if (!fz) { setErr('اختر القطاع'); return }
     if (!fzStart || !fzEnd) { setErr('اختر المدى الزمني'); return }
+    if (!inDateBounds(fzStart, yearBounds) || !inDateBounds(fzEnd, yearBounds) || fzEnd <= fzStart) { setErr('الحجز خارج نطاق السنة الكشفية أو التواريخ غير مرتبة'); return }
     const payload = {
       field_zone_id: fz,
       team_id: myTeamId,
@@ -398,8 +406,8 @@ export default function Materials() {
                 ))}
               </select>
               <input type="number" className="border rounded-xl p-2" placeholder="الكمية" value={resQty} onChange={e=>setResQty(Number(e.target.value))} />
-              <input type="datetime-local" className="border rounded-xl p-2" value={resStart} onChange={e=>setResStart(e.target.value)} />
-              <input type="datetime-local" className="border rounded-xl p-2" value={resEnd} onChange={e=>setResEnd(e.target.value)} />
+              <input type="datetime-local" min={yearBounds ? `${yearBounds.start}T00:00` : undefined} max={yearBounds ? `${yearBounds.end}T23:59` : undefined} className="border rounded-xl p-2" value={resStart} onChange={e=>setResStart(e.target.value)} />
+              <input type="datetime-local" min={yearBounds ? `${yearBounds.start}T00:00` : undefined} max={yearBounds ? `${yearBounds.end}T23:59` : undefined} className="border rounded-xl p-2" value={resEnd} onChange={e=>setResEnd(e.target.value)} />
               <button className="btn btn-brand" onClick={createReservation} disabled={!canReserve}>حجز</button>
             </div>
             <div className="text-sm text-gray-600">مكان الأداة: <b>{selectedMatLoc}</b></div>
@@ -452,8 +460,8 @@ export default function Materials() {
                 <option value="">— اختر قطاع —</option>
                 {zones.filter(z => z.active).map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
               </select>
-              <input type="datetime-local" className="border rounded-xl p-2" value={fzStart} onChange={e=>setFzStart(e.target.value)} />
-              <input type="datetime-local" className="border rounded-xl p-2" value={fzEnd} onChange={e=>setFzEnd(e.target.value)} />
+              <input type="datetime-local" min={yearBounds ? `${yearBounds.start}T00:00` : undefined} max={yearBounds ? `${yearBounds.end}T23:59` : undefined} className="border rounded-xl p-2" value={fzStart} onChange={e=>setFzStart(e.target.value)} />
+              <input type="datetime-local" min={yearBounds ? `${yearBounds.start}T00:00` : undefined} max={yearBounds ? `${yearBounds.end}T23:59` : undefined} className="border rounded-xl p-2" value={fzEnd} onChange={e=>setFzEnd(e.target.value)} />
               <div className="col-span-2 flex items-center">
                 <button className="btn btn-brand" onClick={createFieldReservation} disabled={!canReserve}>حجز</button>
               </div>

@@ -6,7 +6,12 @@ import { LoadingButton } from '../components/ui/LoadingButton'
 import { PageLoader } from '../components/ui/PageLoader'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { clampDateToBounds, getScoutYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import type { Worksheet } from 'exceljs'
+import { PageHero } from '../components/ui/PageHero'
+import { MetricCard } from '../components/ui/MetricCard'
+import { SectionCard } from '../components/ui/SectionCard'
+import { EmptyState } from '../components/ui/EmptyState'
 
 type RoleRow = { role_slug: string; team_id?: string | null }
 type EventRow = { id: string; name: string; event_date: string; notes: string | null }
@@ -17,6 +22,7 @@ export default function FinanceEvent() {
   const toast = useToast()
   const { roles, user } = useAuth()
   const { currentScoutYear } = useScoutYear()
+  const yearBounds = getScoutYearBounds(currentScoutYear)
 
   // صلاحيات: أدمن أو مسؤول ميزانية عام (team_id = null)
   const isAdmin = roles.some((r: RoleRow) => r.role_slug === 'admin')
@@ -79,21 +85,11 @@ export default function FinanceEvent() {
   const [exporting, setExporting] = useState(false)
   type ExportMode = 'one' | 'year'
   const [exportMode, setExportMode] = useState<ExportMode>('one')
-  const years = useMemo(() => {
-    const ys = new Set<number>()
-    for (const e of events) {
-      const y = Number((e.event_date || '').slice(0,4))
-      if (!isNaN(y)) ys.add(y)
-    }
-    return Array.from(ys).sort((a,b)=>a-b)
-  }, [events])
-  const [exportYear, setExportYear] = useState<number | ''>('')
   const [exportEventId, setExportEventId] = useState<string>('')
 
   useEffect(() => {
-    if (years.length && exportYear === '') setExportYear(years[0])
     if (!exportEventId && selectedId) setExportEventId(selectedId)
-  }, [years, exportYear, selectedId, exportEventId])
+  }, [selectedId, exportEventId])
 
   /* ==================== Sanitizers ==================== */
   const stripMarks = (s: any) =>
@@ -139,9 +135,14 @@ export default function FinanceEvent() {
     [budgets]
   )
   const remaining = useMemo(() => budgetTotal - totalSpent, [budgetTotal, totalSpent])
+  const selectedEvent = useMemo(() => events.find(e => e.id === selectedId) || null, [events, selectedId])
+  const spentPct = budgetTotal > 0 ? Math.round((totalSpent / budgetTotal) * 100) : 0
 
   /* ==================== Init ==================== */
-  useEffect(() => { init() }, [canManage])
+  useEffect(() => {
+    setEvents([]); setSelectedId(''); setExpenses([]); setBudgets([])
+    if (canManage && yearBounds) void init()
+  }, [canManage, currentScoutYear?.id])
 
   async function init() {
     if (!canManage) { setLoading(false); return }
@@ -150,8 +151,8 @@ export default function FinanceEvent() {
       await loadEvents()
       const today = new Date(); const pad = (n:number)=>String(n).padStart(2,'0')
       const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`
-      setEvDate(todayStr)
-      setExDate(todayStr)
+      setEvDate(clampDateToBounds(todayStr, yearBounds))
+      setExDate(clampDateToBounds(todayStr, yearBounds))
     } catch (e:any) {
       toast.error(e.message || 'تعذر تحميل الأحداث')
     } finally {
@@ -164,8 +165,8 @@ export default function FinanceEvent() {
       .from('finance_events')
       .select('id, name, event_date, notes')
       .is('soft_deleted_at', null) as any
-    if (currentScoutYear?.start_date) query = query.gte('event_date', currentScoutYear.start_date)
-    if (currentScoutYear?.end_date) query = query.lte('event_date', currentScoutYear.end_date)
+    if (!yearBounds) { setEvents([]); setSelectedId(''); return }
+    query = query.gte('event_date', yearBounds.start).lte('event_date', yearBounds.end)
     const { data, error } = await query
       .order('event_date', { ascending: false })
       .order('name', { ascending: true })
@@ -184,7 +185,7 @@ export default function FinanceEvent() {
       setSelectedId('')
       setExpenses([])
       setBudgets([])
-    } else if (!cleaned.some(ev => ev.id === selectedId)) {
+    } else if (!cleaned.some((ev: EventRow) => ev.id === selectedId)) {
       setSelectedId(cleaned[0].id)
     }
   }
@@ -201,6 +202,8 @@ export default function FinanceEvent() {
       .from('finance_event_expenses')
       .select('id, expense_date, item_name, qty, unit_price, total')
       .eq('event_id', eventId)
+      .gte('expense_date', yearBounds?.start || '9999-01-01')
+      .lte('expense_date', yearBounds?.end || '9999-01-01')
       .is('soft_deleted_at', null)
       .order('expense_date', { ascending: true })
       .order('id', { ascending: true })
@@ -236,7 +239,7 @@ export default function FinanceEvent() {
   /* ==================== Events CRUD ==================== */
   async function createEvent() {
     if (!evName.trim()) return toast.error('ادخل اسم الحدث')
-    if (!evDate) return toast.error('اختر تاريخ الحدث')
+    if (!inDateBounds(evDate, yearBounds)) return toast.error('تاريخ الفعالية خارج نطاق السنة الكشفية')
     setSavingEvent(true)
     try {
       const { data, error } = await supabase
@@ -265,7 +268,7 @@ export default function FinanceEvent() {
   async function updateEvent() {
     if (!selectedId) return
     if (!evName.trim()) return toast.error('ادخل اسم الحدث')
-    if (!evDate) return toast.error('اختر تاريخ الحدث')
+    if (!inDateBounds(evDate, yearBounds)) return toast.error('تاريخ الفعالية خارج نطاق السنة الكشفية')
     setUpdatingEvent(true)
     try {
       const { error } = await supabase
@@ -342,7 +345,7 @@ export default function FinanceEvent() {
     if (!selectedId) return toast.error('اختر حدثاً أولاً')
     const q = Number(exQty), u = Number(exUnit)
     if (!exName.trim()) return toast.error('ادخل اسم البند')
-    if (!exDate) return toast.error('اختر التاريخ')
+    if (!inDateBounds(exDate, yearBounds)) return toast.error('تاريخ المصروف خارج نطاق السنة الكشفية')
     if (!isFinite(q) || q <= 0) return toast.error('العدد غير صالح')
     if (!isFinite(u) || u < 0) return toast.error('سعر القطعة غير صالح')
 
@@ -381,7 +384,7 @@ export default function FinanceEvent() {
     if (!editingId) return
     const q = Number(editQty), u = Number(editUnit)
     if (!editName.trim()) return toast.error('ادخل اسم البند')
-    if (!editDate) return toast.error('اختر التاريخ')
+    if (!inDateBounds(editDate, yearBounds)) return toast.error('تاريخ المصروف خارج نطاق السنة الكشفية')
     if (!isFinite(q) || q <= 0) return toast.error('العدد غير صالح')
     if (!isFinite(u) || u < 0) return toast.error('سعر القطعة غير صالح')
 
@@ -553,15 +556,14 @@ export default function FinanceEvent() {
         .maybeSingle()
       if (error) throw error
       if (data) evs = [data as EventRow]
-    } else if (filters.year) {
-      const y = filters.year
-      const from = `${y}-01-01`
-      const to = `${y+1}-01-01`
+    } else if (yearBounds) {
+      const from = yearBounds.start
+      const to = yearBounds.end
       const { data, error } = await supabase
         .from('finance_events')
         .select('id, name, event_date, notes')
         .gte('event_date', from)
-        .lt('event_date', to)
+        .lte('event_date', to)
         .is('soft_deleted_at', null)
         .order('event_date', { ascending: true })
         .order('name', { ascending: true })
@@ -571,7 +573,7 @@ export default function FinanceEvent() {
       evs = []
     }
 
-    evs = evs.map(e => ({
+    evs = evs.filter(e => inDateBounds(e.event_date, yearBounds)).map(e => ({
       ...e,
       name: sanitizeForUI(e.name),
       event_date: sanitizeForUI(e.event_date),
@@ -587,6 +589,8 @@ export default function FinanceEvent() {
         .from('finance_event_expenses')
         .select('id, event_id, expense_date, item_name, qty, unit_price, total')
         .in('event_id', ids)
+        .gte('expense_date', yearBounds?.start || '9999-01-01')
+        .lte('expense_date', yearBounds?.end || '9999-01-01')
         .is('soft_deleted_at', null)
         .order('expense_date', { ascending: true })
         .order('id', { ascending: true })
@@ -641,9 +645,8 @@ export default function FinanceEvent() {
         const evDate = ev?.event_date?.slice(0,10) || 'event'
         filename = `event_${evDate}_Finance.xlsx`
       } else {
-        if (!exportYear) throw new Error('اختر السنة للتصدير')
-        filters.year = Number(exportYear)
-        filename = `events_${exportYear}.xlsx`
+        if (!yearBounds) throw new Error('لم يتم تحديد السنة الكشفية')
+        filename = `events_scout_year_${yearBounds.start}_${yearBounds.end}.xlsx`
       }
 
       const { evs, expensesByEvent, budgetsByEvent } = await fetchEventsData(filters)
@@ -789,344 +792,104 @@ export default function FinanceEvent() {
   if (!canManage) {
     return (
       <div className="p-6">
-        <h1 className="text-lg font-semibold">الأحداث — مصروفات عامة</h1>
+        <h1 className="text-lg font-semibold">مالية الفعاليات</h1>
         <div className="mt-3 text-sm text-gray-600">ليست لديك صلاحية الوصول إلى هذه الصفحة.</div>
       </div>
     )
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="eventfinance125-page space-y-5 p-4 md:p-6">
       <PageLoader visible={loading} text="جارِ التحميل..." />
 
-      {/* الهيدر */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-xl font-bold">تسجيل المصروفات العامة</h1>
-        {selectedId && (
-          <button
-            className="text-rose-600 hover:underline disabled:opacity-50 w-full sm:w-auto text-start sm:text-right"
-            onClick={softDeleteEvent}
-            disabled={deletingEvent}
-          >
-            {deletingEvent ? 'جارِ الحذف...' : 'حذف الحدث'}
-          </button>
-        )}
+      <PageHero
+        className="eventfinance125-hero"
+        eyebrow="متابعة ميزانية ومصروفات كل فعالية"
+        title="مالية الفعاليات"
+        description="اختار الفعالية ثم راجع ميزانيتها، المصروفات الفعلية، المتبقي، وعدّل البنود من نفس الشاشة. التصدير Excel ما زال يعتمد على نفس البيانات الحالية."
+        badge={currentScoutYear?.name ? <span className="eventfinance125-hero-badge">{currentScoutYear.name}</span> : undefined}
+      />
+
+      <div className="eventfinance125-kpis grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="عدد الفعاليات" value={events.length} hint="داخل السنة الحالية" accent="sky" />
+        <MetricCard label="إجمالي ميزانية الفعالية" value={selectedId ? egp(budgetTotal) : '—'} hint={selectedEvent?.name || 'اختر فعالية'} accent="emerald" />
+        <MetricCard label="إجمالي المصروف" value={selectedId ? egp(totalSpent) : '—'} hint={budgetTotal > 0 ? `${spentPct}% من الميزانية` : 'لا توجد ميزانية'} accent="rose" />
+        <MetricCard label="المتبقي" value={selectedId ? egp(remaining) : '—'} hint={remaining < 0 ? 'تجاوز للميزانية' : remaining <= budgetTotal*.25 && budgetTotal > 0 ? 'أقل من 25%' : 'وضع مالي مستقر'} accent={remaining < 0 ? 'rose' : remaining <= budgetTotal*.25 && budgetTotal > 0 ? 'amber' : 'indigo'} />
       </div>
 
-      {/* Events selector + create */}
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <label className="text-sm">الحدث</label>
-          <select
-            className="border rounded-xl p-2 w-full min-w-0 cursor-pointer"
-            value={selectedId}
-            onChange={e=>setSelectedId(e.target.value)}
-          >
-            {events.map(ev => (
-              <option key={ev.id} value={ev.id}>
-                {ev.event_date?.slice(0,10)} — {ev.name}
-              </option>
-            ))}
-          </select>
-          <div className="text-xs text-gray-500">اختر حدثًا لاستعراض/تعديل ميزانيته ومصروفاته.</div>
-        </div>
-
-        <div className="space-y-2">
-          <div className="text-sm font-medium">إنشاء حدث جديد</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 items-end">
-            <div className="sm:col-span-2 md:col-span-2">
-              <label className="text-xs">اسم الحدث</label>
-              <input className="border rounded-xl p-2 w-full min-w-0" value={evName} onChange={e=>setEvName(e.target.value)} placeholder="مثلاً: رحلة الفيوم" />
-            </div>
-            <div>
-              <label className="text-xs">تاريخ الحدث</label>
-              <input type="date" className="border rounded-xl p-2 w-full min-w-0" value={evDate} onChange={e=>setEvDate(e.target.value)} />
-            </div>
-            <div className="sm:col-span-2 md:col-span-4">
-              <label className="text-xs">ملاحظات</label>
-              <input className="border rounded-xl p-2 w-full min-w-0" value={evNotes} onChange={e=>setEvNotes(e.target.value)} placeholder="اختياري" />
-            </div>
-            <div className="sm:col-span-2 md:col-span-4 flex justify-end">
-              <LoadingButton loading={savingEvent} onClick={createEvent}>إنشاء حدث</LoadingButton>
-            </div>
+      <SectionCard className="eventfinance125-control-card" title="الفعالية الحالية" description="اختار فعالية موجودة لتعديلها أو استخدم نفس البيانات لإنشاء فعالية جديدة عند الحاجة.">
+        <div className="eventfinance125-event-grid">
+          <label className="eventfinance125-field is-wide"><span>اختيار الفعالية</span><select value={selectedId} onChange={e=>setSelectedId(e.target.value)}>{events.map(ev=><option key={ev.id} value={ev.id}>{ev.event_date?.slice(0,10)} — {ev.name}</option>)}</select></label>
+          <label className="eventfinance125-field"><span>اسم الفعالية</span><input value={evName} onChange={e=>setEvName(e.target.value)} placeholder="مثلاً: رحلة الفيوم" /></label>
+          <label className="eventfinance125-field"><span>تاريخ الفعالية</span><input type="date" min={yearBounds?.start} max={yearBounds?.end} value={evDate} onChange={e=>setEvDate(e.target.value)} /></label>
+          <label className="eventfinance125-field is-wide"><span>ملاحظات</span><input value={evNotes} onChange={e=>setEvNotes(e.target.value)} placeholder="اختياري" /></label>
+          <div className="eventfinance125-event-actions">
+            <LoadingButton loading={updatingEvent} onClick={updateEvent} disabled={!selectedId}>حفظ تعديل الفعالية</LoadingButton>
+            <LoadingButton loading={savingEvent} onClick={createEvent}>إنشاء كفعالية جديدة</LoadingButton>
+            {selectedId && <button className="eventfinance125-danger" onClick={softDeleteEvent} disabled={deletingEvent}>{deletingEvent?'جارِ الحذف...':'حذف الفعالية'}</button>}
           </div>
         </div>
-      </section>
+      </SectionCard>
 
-      {/* Summary cards */}
-      {selectedId && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="p-4 rounded-2xl border">
-            <div className="text-xs text-gray-500">إجمالي الميزانية</div>
-            <div className="text-2xl font-bold">{egp(budgetTotal)}</div>
-          </div>
-          <div className="p-4 rounded-2xl border">
-            <div className="text-xs text-gray-500">إجمالي المصروف</div>
-            <div className="text-2xl font-bold">{egp(totalSpent)}</div>
-          </div>
-          <div className={`p-4 rounded-2xl border ${remaining < 0 ? 'border-rose-400 bg-rose-50' : remaining <= budgetTotal*0.25 ? 'border-amber-400 bg-amber-50' : ''}`}>
-            <div className="text-xs text-gray-500">المتبقي (ميزانية - مصروف)</div>
-            <div className="text-2xl font-bold">{egp(remaining)}</div>
-            {remaining < 0 && <div className="text-xs text-rose-700 mt-1">تجاوزت الميزانية</div>}
-            {remaining >= 0 && budgetTotal > 0 && remaining <= 0.25*budgetTotal && <div className="text-xs text-amber-700 mt-1">تحذير: أقل من 25%</div>}
-          </div>
-        </div>
-      )}
-
-      {/* Budget section */}
-      {selectedId && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">بنود الميزانية</h2>
-
-          {/* إضافة بند ميزانية */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 items-end">
-            <div className="sm:col-span-2">
-              <label className="text-sm">العنصر</label>
-              <input className="border rounded-xl p-2 w-full min-w-0" value={bTitle} onChange={e=>setBTitle(e.target.value)} placeholder="مثلاً: مشترك الطلبة" />
-            </div>
-            <div>
-              <label className="text-sm">العدد</label>
-              <input type="number" min={1} className="border rounded-xl p-2 w-full min-w-0" value={bQty} onChange={e=>setBQty(e.target.value as any)} />
-            </div>
-            <div>
-              <label className="text-sm">سعر الفرد</label>
-              <input type="number" min={0} step={0.01} className="border rounded-xl p-2 w-full min-w-0" value={bUnit} onChange={e=>setBUnit(e.target.value as any)} />
-            </div>
-            <div className="sm:col-span-2 md:col-span-5 flex justify-end">
-              <LoadingButton loading={savingBudget} onClick={addBudgetLine}>إضافة بند ميزانية</LoadingButton>
-            </div>
-          </div>
-
-          {/* جدول الميزانية */}
-          <div className="border rounded-2xl w-full max-w-full overflow-x-auto">
-            <table className="w-full min-w-[760px] text-xs sm:text-sm">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-2 text-start">العنصر</th>
-                  <th className="p-2 text-center whitespace-nowrap">العدد</th>
-                  <th className="p-2 text-center whitespace-nowrap">سعر الفرد</th>
-                  <th className="p-2 text-center whitespace-nowrap">الإجمالي</th>
-                  <th className="p-2 text-center">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {budgets.map(b => {
-                  const isEdit = editingBudgetId === b.id
-                  const calcTotal = Number(b.qty||0) * Number(b.unit_price||0)
-                  return (
-                    <tr key={b.id} className="border-t">
-                      <td className="p-2">
-                        {isEdit ? (
-                          <input className="border rounded p-1 w-full min-w-0" value={editBTitle} onChange={e=>setEditBTitle(e.target.value)} />
-                        ) : sanitizeForUI(b.item_name)}
-                      </td>
-                      <td className="p-2 text-center">
-                        {isEdit ? (
-                          <input type="number" min={1} className="border rounded p-1 w-full sm:w-24 text-center"
-                                 value={editBQty} onChange={e=>setEditBQty(e.target.value as any)} />
-                        ) : Number(b.qty)}
-                      </td>
-                      <td className="p-2 text-center">
-                        {isEdit ? (
-                          <input type="number" min={0} step={0.01} className="border rounded p-1 w-full sm:w-28 text-center"
-                                 value={editBUnit} onChange={e=>setEditBUnit(e.target.value as any)} />
-                        ) : egp(Number(b.unit_price || 0))}
-                      </td>
-                      <td className="p-2 text-center">{egp(Number(b.line_total || calcTotal))}</td>
-                      <td className="p-2 text-center">
-                        {!isEdit ? (
-                          <div className="flex gap-2 justify-center">
-                            <button className="text-blue-600 hover:underline" onClick={()=>startEditBudgetRow(b)}>تعديل</button>
-                            <button
-                              className="text-rose-600 hover:underline disabled:opacity-50"
-                              onClick={()=>deleteBudgetRow(b.id)}
-                              disabled={deletingBudgetId === b.id}
-                            >
-                              {deletingBudgetId === b.id ? 'جارِ الحذف...' : 'حذف'}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex gap-2 justify-center">
-                            <button className="text-green-600 hover:underline disabled:opacity-50" onClick={saveEditBudgetRow} disabled={savingBudget}>حفظ</button>
-                            <button className="text-gray-600 hover:underline" onClick={()=>setEditingBudgetId('')}>إلغاء</button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-                {budgets.length === 0 && (
-                  <tr>
-                    <td className="p-3 text-center text-gray-500" colSpan={5}>لا توجد بنود ميزانية لهذا الحدث</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {/* Add expense */}
-      {selectedId && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">إضافة مصروف للحدث</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 items-end">
-            <div>
-              <label className="text-sm">التاريخ</label>
-              <input type="date" className="border rounded-xl p-2 w-full min-w-0" value={exDate} onChange={e=>setExDate(e.target.value)} />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="text-sm">البند</label>
-              <input className="border rounded-xl p-2 w-full min-w-0" value={exName} onChange={e=>setExName(e.target.value)} placeholder="مثلاً: إيجار قاعة" />
-            </div>
-            <div>
-              <label className="text-sm">العدد</label>
-              <input type="number" min={1} className="border rounded-xl p-2 w-full min-w-0" value={exQty} onChange={e=>setExQty(e.target.value as any)} />
-            </div>
-            <div>
-              <label className="text-sm">سعر القطعة</label>
-              <input type="number" min={0} step={0.01} className="border rounded-xl p-2 w-full min-w-0" value={exUnit} onChange={e=>setExUnit(e.target.value as any)} />
-            </div>
-            <div className="sm:col-span-2 md:col-span-5 flex justify-end">
-              <LoadingButton loading={savingExp} onClick={addExpense}>إضافة</LoadingButton>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Expenses table */}
-      {selectedId && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">مصروفات الحدث</h2>
-          <div className="border rounded-2xl w-full max-w-full overflow-x-auto">
-            <table className="w-full min-w-[820px] text-xs sm:text-sm">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-2 text-start whitespace-nowrap">التاريخ</th>
-                  <th className="p-2 text-start">البند</th>
-                  <th className="p-2 text-center whitespace-nowrap">العدد</th>
-                  <th className="p-2 text-center whitespace-nowrap">سعر القطعة</th>
-                  <th className="p-2 text-center whitespace-nowrap">الإجمالي</th>
-                  <th className="p-2 text-center">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {expenses.map(x => {
-                  const isEdit = editingId === x.id
-                  return (
-                    <tr key={x.id} className="border-t">
-                      <td className="p-2">
-                        {isEdit ? (
-                          <input type="date" className="border rounded p-1 w-full sm:w-auto min-w-0" value={editDate} onChange={e=>setEditDate(e.target.value)} />
-                        ) : sanitizeForUI(x.expense_date)}
-                      </td>
-                      <td className="p-2">
-                        {isEdit ? (
-                          <input className="border rounded p-1 w-full min-w-0" value={editName} onChange={e=>setEditName(e.target.value)} />
-                        ) : sanitizeForUI(x.item_name)}
-                      </td>
-                      <td className="p-2 text-center">
-                        {isEdit ? (
-                          <input type="number" min={1} className="border rounded p-1 w-full sm:w-24 text-center" value={editQty} onChange={e=>setEditQty(e.target.value as any)} />
-                        ) : x.qty}
-                      </td>
-                      <td className="p-2 text-center">
-                        {isEdit ? (
-                          <input type="number" min={0} step={0.01} className="border rounded p-1 w-full sm:w-28 text-center" value={editUnit} onChange={e=>setEditUnit(e.target.value as any)} />
-                        ) : egp(Number(x.unit_price))}
-                      </td>
-                      <td className="p-2 text-center">{egp(Number(x.total))}</td>
-                      <td className="p-2 text-center">
-                        {!isEdit ? (
-                          <div className="flex gap-2 justify-center">
-                            <button className="text-blue-600 hover:underline" onClick={()=>startEditRow(x)}>تعديل</button>
-                            <button
-                              className="text-rose-600 hover:underline disabled:opacity-50"
-                              onClick={()=>deleteRow(x.id)}
-                              disabled={deletingExpId === x.id}
-                            >
-                              {deletingExpId === x.id ? 'جارِ الحذف...' : 'حذف'}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex gap-2 justify-center">
-                            <button className="text-green-600 hover:underline disabled:opacity-50" onClick={saveEditRow} disabled={savingExp}>حفظ</button>
-                            <button className="text-gray-600 hover:underline" onClick={()=>setEditingId('')}>إلغاء</button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-                {expenses.length === 0 && (
-                  <tr>
-                    <td className="p-3 text-center text-gray-500" colSpan={6}>لا توجد مصروفات لهذا الحدث</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {/* Export */}
-      {(events.length > 0) && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">تصدير Excel (XLSX)</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 items-end">
-            <div>
-              <label className="text-sm">وضع التصدير</label>
-              <select
-                className="border rounded-xl p-2 w-full min-w-0"
-                value={exportMode}
-                onChange={e=>setExportMode(e.target.value as any)}
-              >
-                <option value="one">حدث محدد (مصروفات + ميزانية)</option>
-                <option value="year">سنة كاملة — ورقتان لكل حدث</option>
-              </select>
-            </div>
-
-            {exportMode === 'one' && (
-              <div className="md:col-span-2">
-                <label className="text-sm">الحدث</label>
-                <select
-                  className="border rounded-xl p-2 w-full min-w-0"
-                  value={exportEventId || selectedId}
-                  onChange={e=>setExportEventId(e.target.value)}
-                >
-                  {events.map(ev => (
-                    <option key={ev.id} value={ev.id}>
-                      {ev.event_date?.slice(0,10)} — {ev.name}
-                    </option>
-                  ))}
-                </select>
+      {!selectedId ? (
+        <EmptyState title="لا توجد فعالية مختارة" description="أنشئ فعالية جديدة أو اختر فعالية موجودة لبدء إدارة الميزانية والمصروفات." />
+      ) : (
+        <>
+          <div className="eventfinance125-workspace">
+            <SectionCard className="eventfinance125-panel" title="بنود الميزانية" description="الخطة المالية للفعالية المختارة؛ الإضافة والتعديل والحذف يستخدمون نفس الوظائف الحالية.">
+              <div className="eventfinance125-add-grid">
+                <label className="eventfinance125-field is-wide"><span>العنصر</span><input value={bTitle} onChange={e=>setBTitle(e.target.value)} placeholder="مثلاً: مشترك الطلبة" /></label>
+                <label className="eventfinance125-field"><span>العدد</span><input type="number" min={1} value={bQty} onChange={e=>setBQty(e.target.value as any)} /></label>
+                <label className="eventfinance125-field"><span>سعر الفرد</span><input type="number" min={0} step={0.01} value={bUnit} onChange={e=>setBUnit(e.target.value as any)} /></label>
+                <LoadingButton loading={savingBudget} onClick={addBudgetLine}>+ إضافة بند</LoadingButton>
               </div>
-            )}
-
-            {exportMode === 'year' && (
-              <div>
-                <label className="text-sm">السنة</label>
-                <select
-                  className="border rounded-xl p-2 w-full min-w-0"
-                  value={exportYear}
-                  onChange={e=>setExportYear(Number(e.target.value))}
-                >
-                  {years.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
+              <div className="eventfinance125-table-wrap">
+                <table className="eventfinance125-table min-w-[760px]"><thead><tr><th>العنصر</th><th>العدد</th><th>سعر الفرد</th><th>الإجمالي</th><th>الإجراءات</th></tr></thead><tbody>
+                  {budgets.map(b=>{const isEdit=editingBudgetId===b.id; const calcTotal=Number(b.qty||0)*Number(b.unit_price||0); return <tr key={b.id}>
+                    <td>{isEdit?<input value={editBTitle} onChange={e=>setEditBTitle(e.target.value)} />:sanitizeForUI(b.item_name)}</td>
+                    <td>{isEdit?<input type="number" min={1} value={editBQty} onChange={e=>setEditBQty(e.target.value as any)} />:Number(b.qty)}</td>
+                    <td>{isEdit?<input type="number" min={0} step={0.01} value={editBUnit} onChange={e=>setEditBUnit(e.target.value as any)} />:egp(Number(b.unit_price||0))}</td>
+                    <td className="eventfinance125-money">{egp(Number(b.line_total||calcTotal))}</td>
+                    <td>{!isEdit?<div className="eventfinance125-row-actions"><button onClick={()=>startEditBudgetRow(b)}>تعديل</button><button className="danger" onClick={()=>deleteBudgetRow(b.id)} disabled={deletingBudgetId===b.id}>{deletingBudgetId===b.id?'...':'حذف'}</button></div>:<div className="eventfinance125-row-actions"><button className="save" onClick={saveEditBudgetRow} disabled={savingBudget}>حفظ</button><button onClick={()=>setEditingBudgetId('')}>إلغاء</button></div>}</td>
+                  </tr>})}
+                  {budgets.length===0&&<tr><td colSpan={5} className="eventfinance125-empty">لا توجد بنود ميزانية لهذا الحدث</td></tr>}
+                </tbody></table>
               </div>
-            )}
+            </SectionCard>
 
-            <div className="md:col-span-1 text-end">
-              <LoadingButton className="w-full sm:w-auto" loading={exporting} onClick={handleExport}>
-                {exporting ? 'جارِ التحضير...' : 'تصدير XLSX'}
-              </LoadingButton>
+            <aside className="eventfinance125-health-card">
+              <div className="eventfinance125-health-title"><span>◎</span><div><small>موقف الفعالية</small><h2>{selectedEvent?.name || 'الفعالية'}</h2></div></div>
+              <div className="eventfinance125-progress"><i style={{width:`${Math.min(Math.max(spentPct,0),100)}%`}} /></div>
+              <div className="eventfinance125-health-list"><div><span>الميزانية</span><strong>{egp(budgetTotal)}</strong></div><div><span>المصروف</span><strong>{egp(totalSpent)}</strong></div><div><span>المتبقي</span><strong className={remaining<0?'danger':''}>{egp(remaining)}</strong></div><div><span>بنود الميزانية</span><strong>{budgets.length}</strong></div><div><span>حركات المصروفات</span><strong>{expenses.length}</strong></div></div>
+              {remaining < 0 ? <div className="eventfinance125-warning is-red">الفعالية تجاوزت الميزانية المحددة.</div> : budgetTotal > 0 && remaining <= budgetTotal*.25 ? <div className="eventfinance125-warning">المتبقي أقل من 25% من الميزانية.</div> : null}
+            </aside>
+          </div>
+
+          <SectionCard className="eventfinance125-panel" title="مصروفات الفعالية" description="سجل المصروفات الفعلية مع التاريخ والكمية وسعر الوحدة، ويمكن تعديل أي صف أو حذفه.">
+            <div className="eventfinance125-add-grid is-expense">
+              <label className="eventfinance125-field"><span>التاريخ</span><input type="date" min={yearBounds?.start} max={yearBounds?.end} value={exDate} onChange={e=>setExDate(e.target.value)} /></label>
+              <label className="eventfinance125-field is-wide"><span>البند</span><input value={exName} onChange={e=>setExName(e.target.value)} placeholder="مثلاً: إيجار قاعة" /></label>
+              <label className="eventfinance125-field"><span>العدد</span><input type="number" min={1} value={exQty} onChange={e=>setExQty(e.target.value as any)} /></label>
+              <label className="eventfinance125-field"><span>سعر القطعة</span><input type="number" min={0} step={0.01} value={exUnit} onChange={e=>setExUnit(e.target.value as any)} /></label>
+              <LoadingButton loading={savingExp} onClick={addExpense}>+ إضافة مصروف</LoadingButton>
             </div>
-          </div>
+            <div className="eventfinance125-table-wrap"><table className="eventfinance125-table min-w-[820px]"><thead><tr><th>التاريخ</th><th>البند</th><th>العدد</th><th>سعر القطعة</th><th>الإجمالي</th><th>الإجراءات</th></tr></thead><tbody>
+              {expenses.map(x=>{const isEdit=editingId===x.id; return <tr key={x.id}><td>{isEdit?<input type="date" min={yearBounds?.start} max={yearBounds?.end} value={editDate} onChange={e=>setEditDate(e.target.value)} />:sanitizeForUI(x.expense_date)}</td><td>{isEdit?<input value={editName} onChange={e=>setEditName(e.target.value)} />:sanitizeForUI(x.item_name)}</td><td>{isEdit?<input type="number" min={1} value={editQty} onChange={e=>setEditQty(e.target.value as any)} />:x.qty}</td><td>{isEdit?<input type="number" min={0} step={0.01} value={editUnit} onChange={e=>setEditUnit(e.target.value as any)} />:egp(Number(x.unit_price))}</td><td className="eventfinance125-money is-expense">{egp(Number(x.total))}</td><td>{!isEdit?<div className="eventfinance125-row-actions"><button onClick={()=>startEditRow(x)}>تعديل</button><button className="danger" onClick={()=>deleteRow(x.id)} disabled={deletingExpId===x.id}>{deletingExpId===x.id?'...':'حذف'}</button></div>:<div className="eventfinance125-row-actions"><button className="save" onClick={saveEditRow} disabled={savingExp}>حفظ</button><button onClick={()=>setEditingId('')}>إلغاء</button></div>}</td></tr>})}
+              {expenses.length===0&&<tr><td colSpan={6} className="eventfinance125-empty">لا توجد مصروفات لهذا الحدث</td></tr>}
+            </tbody></table></div>
+          </SectionCard>
+        </>
+      )}
 
-          <div className="text-xs text-gray-500">
-            * يتم إنشاء ورقتين لكل حدث: واحدة للمصروفات وواحدة لبنود الميزانية، مع صف إجمالي في النهاية.
+      {events.length > 0 && (
+        <SectionCard className="eventfinance125-export" title="تصدير Excel" description="نفس ملف XLSX الحالي: حدث محدد أو سنة كاملة مع ورقة للمصروفات وأخرى للميزانية لكل فعالية.">
+          <div className="eventfinance125-export-grid">
+            <label className="eventfinance125-field"><span>وضع التصدير</span><select value={exportMode} onChange={e=>setExportMode(e.target.value as any)}><option value="one">حدث محدد (مصروفات + ميزانية)</option><option value="year">السنة الكشفية الحالية — ورقتان لكل حدث</option></select></label>
+            {exportMode==='one'&&<label className="eventfinance125-field is-wide"><span>الحدث</span><select value={exportEventId||selectedId} onChange={e=>setExportEventId(e.target.value)}>{events.map(ev=><option key={ev.id} value={ev.id}>{ev.event_date?.slice(0,10)} — {ev.name}</option>)}</select></label>}
+            {exportMode==='year'&&<span className="eventfinance125-field">السنة الكشفية: {currentScoutYear?.name || '—'}</span>}
+            <LoadingButton loading={exporting} onClick={handleExport}>{exporting?'جارِ التحضير...':'تصدير XLSX'}</LoadingButton>
           </div>
-        </section>
+        </SectionCard>
       )}
     </div>
   )

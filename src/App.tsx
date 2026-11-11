@@ -16,12 +16,12 @@ const Notifications = lazy(() => import('./pages/Notifications'))
 const Admin = lazy(() => import('./pages/Admin'))
 const Login = lazy(() => import('./pages/Login'))
 const Home = lazy(() => import('./pages/Home'))
-const ReservationsAdmin = lazy(() => import('./pages/ReservationsAdmin'))
+const ReservationsOverview = lazy(() => import('./pages/ReservationsOverview'))
+const ReservationsDirectManage = lazy(() => import('./pages/ReservationsDirectManage'))
 const AdminMembers = lazy(() => import('./pages/AdminMembers'))
 const MaterialsTeamReservations = lazy(() => import('./pages/MaterialsTeamReservations'))
 const MaterialsAdmin = lazy(() => import('./pages/MaterialsAdmin'))
 const AdminAttendance = lazy(() => import('./pages/AdminAttendance'))
-const AdminReservationsAll = lazy(() => import('./pages/AdminReservationsAll'))
 const AdminFieldReservations = lazy(() => import('./pages/AdminFieldReservations'))
 const FieldReservationsTeam = lazy(() => import('./pages/FieldReservationsTeam'))
 const AdminEvaluations = lazy(() => import('./pages/AdminEvaluations'))
@@ -58,7 +58,6 @@ const AdminBestChefs = lazy(() => import('./pages/AdminBestChefs'))
 const BestChefsGallery = lazy(() => import('./pages/BestChefsGallery'))
 const CampProgram = lazy(() => import('./pages/CampProgram'))
 const YearResponsibilities = lazy(() => import('./pages/YearResponsibilities'))
-const KnowledgeBank = lazy(() => import('./pages/KnowledgeBank'))
 
 function PageFallback() {
   return (
@@ -76,13 +75,13 @@ const PAGE_LABELS: Record<string, string> = {
   '/app/attendance': 'الحضور',
   '/app/finance': 'المالية',
   '/app/materials': 'الأدوات',
-  '/app/reservation': 'الحجوزات',
   '/app/TeamSecretaryAttendance': 'غياب فريقي',
   '/app/legacy-evaluation': 'التقييم القديم',
   '/app/AdminDashboard': 'لوحة التحكم',
   '/app/member-profile': 'ملفي الشخصي',
   '/app/best-chefs': 'أفضل الـ chefs',
   '/app/AdminReservationsAll': 'الحجوزات',
+  '/app/reservation': 'إدارة الحجوزات المباشرة',
   '/app/AdminFieldReservations': 'إدارة الأرض',
   '/app/AdminAttendance': 'إدارة الحضور',
   '/app/AdminFinance': 'إدارة الميزانية',
@@ -91,7 +90,6 @@ const PAGE_LABELS: Record<string, string> = {
   '/app/admin': 'لوحة الإدارة',
   '/app/admin-scout-years': 'السنة الكشفية',
   '/app/year-responsibilities': 'مسؤوليات السنة',
-  '/app/knowledge-bank': 'بنك المعرفة',
   '/app/admin-terms-meetings': 'الترمات والاجتماعات',
   '/app/admin-members': 'الأعضاء والأدوار',
   '/app/admin-best-chefs': 'أفضل الـ chefs',
@@ -100,7 +98,7 @@ const PAGE_LABELS: Record<string, string> = {
   '/app/AdminEvents': 'الفعاليات',
   '/app/AdminEvalQuestions': 'أسئلة التقييم',
   '/app/financeEvent': 'ميزانية المجموعة',
-  '/app/MaterialsReturnApprove': 'تسليم العهدة',
+  '/app/MaterialsReturnApprove': 'استلام واسترجاع الأدوات',
   '/app/meeting-minutes': 'المحاضر',
   '/app/meeting-tasks': 'متابعة التاسكات',
   '/app/camp-installments': 'التقسيط',
@@ -151,10 +149,9 @@ function ScrollTopButton() {
   )
 }
 
-function MobileNavGlyph({ type }: { type: 'home' | 'knowledge' | 'bell' | 'profile' | 'more' }) {
+function MobileNavGlyph({ type }: { type: 'home' | 'bell' | 'profile' | 'more' }) {
   const common = { width: 21, height: 21, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
   if (type === 'home') return <svg {...common}><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
-  if (type === 'knowledge') return <svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5Z"/><path d="M8 7h8"/></svg>
   if (type === 'bell') return <svg {...common}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
   if (type === 'profile') return <svg {...common}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
   return <svg {...common}><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
@@ -167,9 +164,9 @@ function MobileBottomNav({ onMore, moreOpen }: { onMore: () => void; moreOpen: b
         <span className="mobile-bottom-icon"><MobileNavGlyph type="home" /></span>
         <span>الرئيسية</span>
       </NavLink>
-      <NavLink to="/app/knowledge-bank" className={({ isActive }) => `mobile-bottom-item ${isActive ? 'is-active' : ''}`}>
-        <span className="mobile-bottom-icon"><MobileNavGlyph type="knowledge" /></span>
-        <span>المعرفة</span>
+      <NavLink to="/app/member-profile" className={({ isActive }) => `mobile-bottom-item ${isActive ? 'is-active' : ''}`}>
+        <span className="mobile-bottom-icon"><MobileNavGlyph type="profile" /></span>
+        <span>ملفي</span>
       </NavLink>
       <NavLink to="/app/notifications" className={({ isActive }) => `mobile-bottom-item ${isActive ? 'is-active' : ''}`}>
         <span className="mobile-bottom-icon"><MobileNavGlyph type="bell" /></span>
@@ -232,7 +229,7 @@ function useRouteScrollMemory(routeKey: string) {
 }
 
 function ProtectedLayout() {
-  const { user, roles, loading } = useAuth()
+  const { user, roles, loading, accountInactive } = useAuth()
   const {
     currentScoutYear,
     actualCurrentScoutYear,
@@ -274,6 +271,10 @@ function ProtectedLayout() {
   }, [pageTitle])
 
   if (loading) return <PageLoader visible text="جاري تجهيز التطبيق..." />
+  // Render the exact same branded inactive/login experience everywhere. The admission
+  // gate normally clears the user before this point, but this fallback prevents any
+  // stale protected-route UI from appearing if access changes during an active session.
+  if (accountInactive) return <Login />
   if (!user) return <Navigate to="/" state={{ from: loc }} replace />
 
   return (
@@ -401,7 +402,7 @@ export default function App() {
               <Route path="MaterialTeamReservation" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_materials']}><MaterialsTeamReservations /></RouteAccessGuard>} />
               <Route path="MaterialAdmin" element={<RouteAccessGuard globalRoles={['responsable_materials']}><MaterialsAdmin /></RouteAccessGuard>} />
               <Route path="AdminAttendance" element={<RouteAccessGuard adminOnly><AdminAttendance /></RouteAccessGuard>} />
-              <Route path="AdminReservationsAll" element={<RouteAccessGuard adminOnly><AdminReservationsAll /></RouteAccessGuard>} />
+              <Route path="AdminReservationsAll" element={<RouteAccessGuard adminOnly><ReservationsOverview /></RouteAccessGuard>} />
               <Route path="AdminFieldReservations" element={<RouteAccessGuard sameTeamRoles={['responsable_materials', 'chef_de_legion']}><AdminFieldReservations /></RouteAccessGuard>} />
               <Route path="AdminEvaluations" element={<RouteAccessGuard adminOnly><AdminEvaluations /></RouteAccessGuard>} />
               <Route path="LegionEvaluations" element={<RouteAccessGuard anyRoles={['chef_de_legion']}><LegionEvaluations /></RouteAccessGuard>} />
@@ -424,7 +425,7 @@ export default function App() {
               <Route path="camp-program" element={<CampProgram />} />
               <Route path="admin-scout-years" element={<RouteAccessGuard adminOnly><AdminScoutYears /></RouteAccessGuard>} />
               <Route path="year-responsibilities" element={<RouteAccessGuard adminOnly><YearResponsibilities /></RouteAccessGuard>} />
-              <Route path="knowledge-bank" element={<KnowledgeBank />} />
+              <Route path="knowledge-bank" element={<Navigate to="/app" replace />} />
               <Route path="admin-terms-meetings" element={<RouteAccessGuard adminOnly><AdminTermsMeetings /></RouteAccessGuard>} />
               <Route path="member-profile" element={<MemberProfile360 />} />
               <Route path="member-profile/:memberId" element={<MemberProfile360 />} />
@@ -434,7 +435,7 @@ export default function App() {
               <Route path="best-chefs" element={<BestChefsGallery />} />
               <Route path="AdminEvalQuestions" element={<RouteAccessGuard adminOnly><AdminEvalQuestions /></RouteAccessGuard>} />
               <Route path="AdminFinance" element={<RouteAccessGuard globalRoles={['responsable_finance']}><AdminFinance /></RouteAccessGuard>} />
-              <Route path="AdminSecretary" element={<RouteAccessGuard globalRoles={['responsable_secretary']}><AdminSecretary /></RouteAccessGuard>} />
+              <Route path="AdminSecretary" element={<RouteAccessGuard anyRoles={['responsable_secretary']}><AdminSecretary /></RouteAccessGuard>} />
               <Route path="TeamSecretaryAttendance" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><TeamSecretaryAttendance /></RouteAccessGuard>} />
               <Route path="AdminEvents" element={<RouteAccessGuard adminOnly><AdminEvents /></RouteAccessGuard>} />
               <Route path="ChefsEvaluationOverview" element={<RouteAccessGuard anyRoles={['chef_de_legion']} globalRoles={['responsable_secretary']}><ChefsEvaluationOverview /></RouteAccessGuard>} />
@@ -443,7 +444,7 @@ export default function App() {
               <Route path="evaluation" element={<MyEvaluation />} />
               <Route path="FieldReservationsTeam" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_materials']}><FieldReservationsTeam /></RouteAccessGuard>} />
               <Route path="materials" element={<RouteAccessGuard anyRoles={['responsable_materials']}><Materials /></RouteAccessGuard>} />
-              <Route path="reservation" element={<RouteAccessGuard adminOnly><ReservationsAdmin /></RouteAccessGuard>} />
+              <Route path="reservation" element={<RouteAccessGuard adminOnly><ReservationsDirectManage /></RouteAccessGuard>} />
               <Route path="admin-members" element={<RouteAccessGuard adminOnly><AdminMembers /></RouteAccessGuard>} />
               <Route path="notifications" element={<Notifications />} />
               <Route path="admin" element={<RouteAccessGuard adminOnly><Admin /></RouteAccessGuard>} />

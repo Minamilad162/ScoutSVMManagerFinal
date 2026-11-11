@@ -46,8 +46,7 @@ export function Modal({
           dir="rtl"
         >
           <div className="app-modal-shine" aria-hidden="true" />
-          {(title || onClose) && (
-            <div className="app-modal-header relative flex items-center justify-between gap-3 border-b border-white/60 px-5 py-4 md:px-6">
+          <div className="app-modal-header relative flex items-center justify-between gap-3 border-b border-white/60 px-5 py-4 md:px-6">
               {title ? (
                 <div className="app-modal-title text-lg font-black tracking-tight text-slate-900">{title}</div>
               ) : (
@@ -56,8 +55,7 @@ export function Modal({
               <button type="button" className="app-modal-x" onClick={onClose} aria-label="إغلاق">
                 ×
               </button>
-            </div>
-          )}
+          </div>
           <div className="app-modal-content relative px-5 py-4 text-sm leading-6 text-slate-700 md:px-6">
             {children}
           </div>

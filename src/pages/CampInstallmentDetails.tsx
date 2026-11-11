@@ -28,6 +28,7 @@ type ParticipationFilter = 'all' | 'participating' | 'not_participating'
 
 type CampSummaryRow = {
   id: string
+  scout_year_id?: string | null
   title: string
   description: string | null
   base_amount: number
@@ -507,8 +508,8 @@ export default function CampInstallmentDetails() {
         module: 'camp_installments',
         entityType: 'camp_member',
         entityId: row.id,
-        entityDisplay: row.member_name,
-        summary: `${nextValue ? 'فعّل' : 'أوقف'} مشاركة ${row.member_name} في معسكر ${row.camp_title}` ,
+        entityDisplay: (membersMap[row.member_id]?.full_name || row.member_id),
+        summary: `${nextValue ? 'فعّل' : 'أوقف'} مشاركة ${(membersMap[row.member_id]?.full_name || row.member_id)} في معسكر ${(camp?.title || 'المعسكر')}` ,
         severity: 'warning',
         source: 'CampInstallmentDetails',
         scoutYearId: camp?.scout_year_id ?? null,
@@ -517,7 +518,7 @@ export default function CampInstallmentDetails() {
         before: { is_participating: row.is_participating },
         after: { is_participating: nextValue },
         changedFields: ['is_participating'],
-        context: { camp_title: row.camp_title, member_name: row.member_name },
+        context: { camp_title: (camp?.title || 'المعسكر'), member_name: (membersMap[row.member_id]?.full_name || row.member_id) },
       })
       await loadAll()
     } catch (e: any) {
@@ -589,8 +590,8 @@ export default function CampInstallmentDetails() {
         module: 'camp_payments',
         entityType: 'camp_installment_payment',
         entityId: insertedPayment?.id ?? null,
-        entityDisplay: `${selectedPaymentMember.member_name} — ${selectedPaymentMember.camp_title}` ,
-        summary: `سجّل دفعة بقيمة ${amount} للعضو ${selectedPaymentMember.member_name} في معسكر ${selectedPaymentMember.camp_title}` ,
+        entityDisplay: `${(membersMap[selectedPaymentMember.member_id]?.full_name || selectedPaymentMember.member_id)} — ${(camp?.title || 'المعسكر')}` ,
+        summary: `سجّل دفعة بقيمة ${amount} للعضو ${(membersMap[selectedPaymentMember.member_id]?.full_name || selectedPaymentMember.member_id)} في معسكر ${(camp?.title || 'المعسكر')}` ,
         severity: 'info',
         source: 'CampInstallmentDetails',
         scoutYearId: camp?.scout_year_id ?? null,
@@ -599,7 +600,7 @@ export default function CampInstallmentDetails() {
         before: { paid_amount: selectedPaymentMember.paid_amount, remaining_amount: selectedPaymentMember.remaining_amount },
         after: { ...payload, paid_amount: Number(selectedPaymentMember.paid_amount || 0) + amount, remaining_amount: Math.max(Number(selectedPaymentMember.remaining_amount || 0) - amount, 0) },
         changedFields: ['amount', 'payment_date', 'payment_method', 'notes', 'paid_amount', 'remaining_amount'],
-        context: { camp_title: selectedPaymentMember.camp_title, member_name: selectedPaymentMember.member_name },
+        context: { camp_title: (camp?.title || 'المعسكر'), member_name: (membersMap[selectedPaymentMember.member_id]?.full_name || selectedPaymentMember.member_id) },
       })
 
       setSuccessMsg('تم تسجيل الدفعة بنجاح')

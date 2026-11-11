@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthProvider'
 import { PageHero } from '../components/ui/PageHero'
 import { InlineAlert } from '../components/ui/InlineAlert'
 import { useCurrentScoutYear } from '../hooks/useCurrentScoutYear'
+import { clampDateToBounds, getScoutYearBounds, inDateBounds } from '../lib/scoutYearScope'
 
 type RoleRow = { role_slug: string; team_id?: string | null }
 
@@ -115,6 +116,10 @@ export default function MeetingMinuteForm() {
   const [tasks, setTasks] = useState<TaskRow[]>([])
   const [originalTasks, setOriginalTasks] = useState<TaskRow[]>([])
   const { currentScoutYear } = useCurrentScoutYear()
+  const yearBounds = getScoutYearBounds(currentScoutYear)
+  useEffect(() => {
+    if (!id) setMeetingDate(clampDateToBounds(todayISO(), yearBounds))
+  }, [id, currentScoutYear?.id])
 
   const hasRole = useCallback(
     (slug: string) => (roles || []).some((r) => r.role_slug === slug),
@@ -157,6 +162,7 @@ export default function MeetingMinuteForm() {
       if (taskError) throw taskError
 
       const m = minute as MinuteRow
+      if (!inDateBounds(m.meeting_date, yearBounds)) throw new Error('هذا المحضر لا ينتمي إلى السنة الكشفية المختارة')
       const t = ((taskRows || []) as TaskRow[]).map((x, idx) => ({
         ...x,
         sort_order: typeof x.sort_order === 'number' ? x.sort_order : idx,
@@ -175,7 +181,7 @@ export default function MeetingMinuteForm() {
     } finally {
       setLoading(false)
     }
-  }, [id, canAccess])
+  }, [id, canAccess, currentScoutYear?.id, currentScoutYear?.start_date, currentScoutYear?.end_date])
 
   useEffect(() => {
     loadData()
@@ -288,6 +294,7 @@ export default function MeetingMinuteForm() {
 
   const validate = () => {
     if (!meetingDate) return 'تاريخ الاجتماع مطلوب'
+    if (!inDateBounds(meetingDate, yearBounds)) return 'تاريخ الاجتماع خارج السنة الكشفية المختارة'
     if (!isEdit && currentScoutYear?.start_date && meetingDate < currentScoutYear.start_date) {
       return `تاريخ الاجتماع يجب أن يكون داخل السنة الكشفية الحالية (${currentScoutYear.name})`
     }

@@ -10,6 +10,8 @@ import { SectionCard } from '../components/ui/SectionCard'
 import { useRoleGate } from '../hooks/useRoleGate'
 import { useAuth } from '../components/AuthProvider'
 import { fetchCurrentUserContext, fetchTeams, fetchTerms } from '../features/reference/api'
+import { clampDateToBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
+import { useScoutYear } from '../components/ScoutYearProvider'
 import { getErrorMessage, logError } from '../lib/errors'
 
 type Team = { id: string; name: string }
@@ -18,6 +20,7 @@ type Expense = { id: string; expense_date: string; item_name: string; qty: numbe
 
 export default function Finance() {
   const toast = useToast()
+  const { currentScoutYear } = useScoutYear()
   const gate = useRoleGate()
   const { roles } = useAuth()
 
@@ -29,9 +32,10 @@ export default function Finance() {
   const [budget, setBudget] = useState<number | null>(null)
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [loading, setLoading] = useState<boolean>(true)
-  const [saving, setSaving] = useState<boolean>(false)
 
   // Expense form
+  const termMeta = terms.find(t => t.id === termId) || null
+  const termBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
   const [exDate, setExDate] = useState<string>('')
   const [exName, setExName] = useState<string>('')
   const [exQty, setExQty] = useState<number | ''>('')
@@ -43,7 +47,10 @@ export default function Finance() {
 
   const egp = (v: number) => new Intl.NumberFormat('en-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(v)
 
-  useEffect(() => { init() }, [])
+  useEffect(() => {
+    setTerms([]); setTermId(''); setBudget(null); setExpenses([])
+    if (currentScoutYear?.id) void init()
+  }, [currentScoutYear?.id])
   async function init() {
     setLoading(true)
     try {
@@ -51,7 +58,7 @@ export default function Finance() {
       setTerms(tm)
       setTeams(ts)
 
-      if (!termId && tm.length) setTermId(tm[0].id)
+      setTermId(tm[0]?.id || '')
 
       if (isAdmin || isGlobalFinance) {
         if (ts.length) setTeamId(ts[0].id)
@@ -72,13 +79,19 @@ export default function Finance() {
     }
   }
 
-  useEffect(() => { if (teamId && termId) refreshData() }, [teamId, termId])
+  useEffect(() => {
+    setBudget(null); setExpenses([])
+    if (teamId && termId && termBounds) void refreshData()
+  }, [teamId, termId, currentScoutYear?.id, termBounds?.start, termBounds?.end])
+
+  useEffect(() => { if (termBounds) setExDate(prev => clampDateToBounds(prev, termBounds)) }, [termBounds?.start, termBounds?.end])
   async function refreshData() {
     setLoading(true)
     try {
+      if (!termBounds) { setBudget(null); setExpenses([]); return }
       const [{ data: bRow, error: bErr }, { data: expRows, error: eErr }] = await Promise.all([
-        supabase.from('team_budgets').select('amount_total').eq('team_id', teamId).eq('term_id', termId).is('soft_deleted_at', null).maybeSingle(),
-        supabase.from('expenses').select('id, expense_date, item_name, qty, unit_price, total').eq('team_id', teamId).eq('term_id', termId).is('soft_deleted_at', null).order('expense_date', { ascending: false })
+        supabase.from('v_team_budgets_effective').select('amount_total').eq('team_id', teamId).eq('term_id', termId).is('soft_deleted_at', null).maybeSingle(),
+        supabase.from('expenses').select('id, expense_date, item_name, qty, unit_price, total').eq('team_id', teamId).eq('term_id', termId).gte('expense_date', termBounds.start).lte('expense_date', termBounds.end).is('soft_deleted_at', null).order('expense_date', { ascending: false })
       ])
       if (bErr) throw bErr
       if (eErr) throw eErr
@@ -101,30 +114,10 @@ export default function Finance() {
     return 'ok'
   }, [budget, remaining, spent])
 
-  async function saveBudget() {
-    if (!gate.canEditBudget(teamId)) { toast.error('ليس لديك صلاحية تعديل الميزانية'); return }
-    if (!teamId || !termId) { toast.error('اختر الفريق والترم'); return }
-    const val = Number(prompt('ادخل قيمة الميزانية الجديدة (EGP):', String(budget ?? 0)))
-    if (!isFinite(val) || val < 0) return
-
-    setSaving(true)
-    try {
-      const { error } = await supabase
-        .from('team_budgets')
-        .upsert({ team_id: teamId, term_id: termId, amount_total: val }, { onConflict: 'team_id,term_id' })
-      if (error) throw error
-      toast.success('تم حفظ الميزانية')
-      await refreshData()
-    } catch (e:any) {
-      toast.error(e.message || 'تعذر حفظ الميزانية')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   async function addExpense() {
     if (!gate.canWriteExpense(teamId)) { toast.error('ليست لديك صلاحية إضافة مصروف'); return }
-    if (!teamId || !termId) return toast.error('اختر الفريق والترم')
+    if (!teamId || !termId || !termBounds) return toast.error('اختر ترمًا داخل السنة الكشفية الحالية')
+    if (!inDateBounds(exDate, termBounds)) return toast.error('تاريخ المصروف خارج نطاق السنة الكشفية أو الترم')
     const q = Number(exQty); const u = Number(exUnit)
     if (!isFinite(q) || q <= 0) return toast.error('العدد غير صالح')
     if (!isFinite(u) || u < 0) return toast.error('سعر القطعة غير صالح')
@@ -178,7 +171,7 @@ export default function Finance() {
         </div>
 
         <div className="text-end">
-          {(gate.canEditBudget(teamId)) && <LoadingButton loading={saving} onClick={saveBudget}>تعديل الميزانية</LoadingButton>}
+          <div className="text-xs text-slate-500">تحديد الميزانية واعتمادها يتم من إدارة الميزانية بواسطة الأدمن.</div>
         </div>
       </div>
       </SectionCard>
@@ -203,7 +196,7 @@ export default function Finance() {
           <div className="finance99-form grid md:grid-cols-5 gap-2 items-end">
             <div>
               <label className="text-sm">التاريخ</label>
-              <input type="date" className="border rounded-xl p-2 w-full" value={exDate} onChange={e=>setExDate(e.target.value)} />
+              <input type="date" min={termBounds?.start} max={termBounds?.end} className="border rounded-xl p-2 w-full" value={exDate} onChange={e=>setExDate(e.target.value)} />
             </div>
             <div className="md:col-span-2">
               <label className="text-sm">اسم المنتج</label>

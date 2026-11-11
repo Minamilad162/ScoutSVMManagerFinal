@@ -2,16 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../components/ui/Toaster'
 import { LoadingButton } from '../components/ui/LoadingButton'
-import { MetricCard } from '../components/ui/MetricCard'
-import { PageHero } from '../components/ui/PageHero'
 import { PageLoader } from '../components/ui/PageLoader'
-import { SectionCard } from '../components/ui/SectionCard'
 import { useRoleGate } from '../hooks/useRoleGate'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
 import { fetchCurrentUserContext, fetchTeamById, fetchTeams, fetchTerms } from '../features/reference/api'
 import { getErrorMessage, logError } from '../lib/errors'
 import type { Borders, Fill, Worksheet } from 'exceljs'
+import scoutCompassScarf from '../assets/scout-theme/scout-compass-scarf.webp'
+import { clampDateToBounds, getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 
 type Team = { id: string; name: string }
 type Term = { id: string; name: string; year: number; start_date?: string | null; end_date?: string | null }
@@ -93,8 +92,10 @@ export default function TeamFinance() {
 
   // ===== Helpers: term range + dates =====
   const termMeta = useMemo(() => terms.find(t => t.id === termId) || null, [terms, termId])
-  const termMin = termMeta?.start_date || ''
-  const termMax = termMeta?.end_date || ''
+  const yearBounds = getScoutYearBounds(currentScoutYear)
+  const termBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
+  const termMin = termBounds?.start || ''
+  const termMax = termBounds?.end || ''
   const clampToTerm = (d: string) => {
     if (!d) return d
     if (!termMin && !termMax) return d
@@ -108,16 +109,17 @@ export default function TeamFinance() {
     return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`
   }
 
-  useEffect(() => { init() }, [])
+  useEffect(() => {
+    setTermId(''); setTerms([]); setBudget(null); setExpenses([]); setTermDates([])
+    if (currentScoutYear?.id) void init()
+  }, [currentScoutYear?.id])
   async function init() {
     setLoading(true)
     try {
       const tm = await fetchTerms()
       setTerms(tm)
-      if (tm.length) {
-        setTermId(tm[0].id)
-        setExportYear(tm[0].year)
-      }
+      setTermId(tm[0]?.id || '')
+      setExportYear(tm[0]?.year ?? '')
 
       let myTeamId: string | null = null
       const meRow = await fetchCurrentUserContext()
@@ -148,13 +150,14 @@ export default function TeamFinance() {
   }
 
   // حمّل تواريخ الترم المختار + اضبط exDate
-  useEffect(() => { if (termId) loadTermDates(termId) }, [termId])
+  useEffect(() => { if (termId && termBounds) void loadTermDates(termId); else setTermDates([]) }, [termId, termMin, termMax])
   async function loadTermDates(tid: string) {
     try {
       const { data, error } = await supabase
         .from('term_meeting_dates')
         .select('id, meeting_date')
         .eq('term_id', tid)
+        .gte('meeting_date', termMin).lte('meeting_date', termMax)
         .order('meeting_date', { ascending: true })
       if (error) throw error
       const list = (data as any as TermDateRow[]) ?? []
@@ -165,21 +168,24 @@ export default function TeamFinance() {
         setExDate(list[0].meeting_date)
       } else {
         setUseCustomDate(true)
-        if (termMeta?.start_date) setExDate(termMeta.start_date)
-        else setExDate(prev => clampToTerm(prev) || prev)
+        setExDate(prev => clampDateToBounds(prev, termBounds))
       }
     } catch (e:any) {
       toast.error(e.message || 'تعذر تحميل تواريخ الترم')
     }
   }
 
-  useEffect(() => { if (teamId && termId) refreshData() }, [teamId, termId])
+  useEffect(() => {
+    setBudget(null); setExpenses([])
+    if (teamId && termId && termBounds) void refreshData()
+  }, [teamId, termId, currentScoutYear?.id, termMin, termMax])
   async function refreshData() {
     setLoading(true)
     try {
+      if (!termBounds) { setBudget(null); setExpenses([]); return }
       const [{ data: bRow, error: bErr }, { data: expRows, error: eErr }] = await Promise.all([
-        supabase.from('team_budgets').select('amount_total').eq('team_id', teamId).eq('term_id', termId).is('soft_deleted_at', null).maybeSingle(),
-        supabase.from('expenses').select('id, expense_date, item_name, qty, unit_price, total, is_delivered').eq('team_id', teamId).eq('term_id', termId).is('soft_deleted_at', null).order('expense_date', { ascending: false })
+        supabase.from('v_team_budgets_effective').select('amount_total').eq('team_id', teamId).eq('term_id', termId).is('soft_deleted_at', null).maybeSingle(),
+        supabase.from('expenses').select('id, expense_date, item_name, qty, unit_price, total, is_delivered').eq('team_id', teamId).eq('term_id', termId).gte('expense_date', termMin).lte('expense_date', termMax).is('soft_deleted_at', null).order('expense_date', { ascending: false })
       ])
       if (bErr) throw bErr
       if (eErr) throw eErr
@@ -220,13 +226,13 @@ export default function TeamFinance() {
   }
 
   async function addExpense() {
-    if (!teamId || !termId) return toast.error('اختر الفريق والترم')
+    if (!teamId || !termId || !termBounds) return toast.error('اختر ترمًا داخل السنة الكشفية الحالية')
     if (!gate.canWriteExpense(teamId)) { toast.error('ليست لديك صلاحية إضافة مصروف'); return }
     const q = Number(exQty); const u = Number(exUnit)
     if (!isFinite(q) || q <= 0) return toast.error('العدد غير صالح')
     if (!isFinite(u) || u < 0) return toast.error('سعر القطعة غير صالح')
     if (!exName.trim()) return toast.error('ادخل اسم المنتج')
-    if (!exDate) return toast.error('اختر التاريخ')
+    if (!inDateBounds(exDate, termBounds)) return toast.error('تاريخ المصروف خارج نطاق السنة الكشفية أو الترم')
 
     const clamped = clampToTerm(exDate)
     if ((termMin || termMax) && clamped !== exDate) {
@@ -272,14 +278,18 @@ export default function TeamFinance() {
       termsArrTyped.map(t => [t.id, { name: t.name, year: t.year }])
     )
 
-    let termFilterIds: string[] | undefined = filters.termIds
-    if (filters.year && !termFilterIds) {
-      const yearTerms = termsArrTyped.filter(t => t.year === filters.year).map(t => t.id)
-      termFilterIds = yearTerms
-    }
+    // All modes, including 'all', are restricted to the viewed scout year.
+    // An empty list must never turn into an unfiltered production query.
+    const selectedTerms = termsArrTyped.filter(t =>
+      (!filters.termIds || filters.termIds.includes(t.id)) &&
+      (!filters.year || t.year === filters.year) &&
+      Boolean(getTermYearBounds(currentScoutYear, t))
+    )
+    const termFilterIds = selectedTerms.map(t => t.id)
+    if (!yearBounds || !termFilterIds.length) return { teamsMap, termsMap, termsArr: selectedTerms, budgets: [], exps: [] }
 
-    let bq = supabase.from('team_budgets').select('team_id, term_id, amount_total').is('soft_deleted_at', null)
-    if (termFilterIds?.length) bq = bq.in('term_id', termFilterIds)
+    let bq = supabase.from('v_team_budgets_effective').select('team_id, term_id, amount_total').is('soft_deleted_at', null)
+    bq = bq.in('term_id', termFilterIds)
     if (filters.teamIds?.length) bq = bq.in('team_id', filters.teamIds)
     const { data: budgets, error: bErr } = await bq
     if (bErr) throw bErr
@@ -287,12 +297,14 @@ export default function TeamFinance() {
     let eq = supabase.from('expenses')
       .select('team_id, term_id, expense_date, item_name, qty, unit_price, total')
       .is('soft_deleted_at', null)
-    if (termFilterIds?.length) eq = eq.in('term_id', termFilterIds)
+    eq = eq.in('term_id', termFilterIds).gte('expense_date', yearBounds.start).lte('expense_date', yearBounds.end)
     if (filters.teamIds?.length) eq = eq.in('team_id', filters.teamIds)
     const { data: exps, error: eErr } = await eq
     if (eErr) throw eErr
 
-    return { teamsMap, termsMap, termsArr, budgets: budgets ?? [], exps: exps ?? [] }
+    const allowedTerms = new Set(termFilterIds)
+    const validExpenses = (exps ?? []).filter(e => allowedTerms.has(e.term_id) && inDateBounds(e.expense_date, getTermYearBounds(currentScoutYear, selectedTerms.find(t => t.id === e.term_id))))
+    return { teamsMap, termsMap, termsArr: selectedTerms, budgets: budgets ?? [], exps: validExpenses }
   }
 
   function parseDate(d?: string) {
@@ -373,7 +385,7 @@ export default function TeamFinance() {
         budgets.forEach((b:any)=> termIdsSet.add(b.term_id))
         exps.forEach((e:any)=> termIdsSet.add(e.term_id))
       }
-      if (termIdsSet.size === 0) termsArr.forEach(t => termIdsSet.add(t.id))
+      // No fallback to a different year when the requested selection is empty.
 
       const ExcelJS = (await import('exceljs')).default
       const wb = new ExcelJS.Workbook()
@@ -522,6 +534,29 @@ export default function TeamFinance() {
   const [togglingId,   setTogglingId]   = useState<string | null>(null)
 
   const canModify = (teamId && gate.canWriteExpense(teamId)) || isAdmin || isGlobalFinance
+  const selectedTeamName = teams.find(team => team.id === teamId)?.name || 'الفريق'
+  const selectedTermLabel = termMeta ? `${termMeta.year} — ${termMeta.name}` : 'الترم غير محدد'
+  const spentPercent = budget && budget > 0 ? Math.max(0, Math.min(100, (spent / budget) * 100)) : (spent > 0 ? 100 : 0)
+  const deliveredExpensesCount = expenses.filter(expense => expense.is_delivered).length
+  const pendingExpensesCount = Math.max(0, expenses.length - deliveredExpensesCount)
+  const budgetStateLabel = status === 'depleted' ? 'الميزانية مستنفدة' : status === 'low' ? 'المتبقي أقل من 25%' : 'الوضع المالي مستقر'
+  const monthlySpend = useMemo(() => {
+    const grouped = new Map<string, number>()
+    expenses.forEach(expense => {
+      const raw = (expense.expense_date || '').slice(0, 7)
+      if (!raw) return
+      grouped.set(raw, (grouped.get(raw) || 0) + (Number(expense.total) || 0))
+    })
+    return [...grouped.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([key, value]) => ({
+        key,
+        label: new Intl.DateTimeFormat('ar-EG', { month: 'short' }).format(new Date(`${key}-01T00:00:00`)),
+        value,
+      }))
+  }, [expenses])
+  const maxMonthlySpend = Math.max(1, ...monthlySpend.map(item => item.value))
 
   function startEditRow(x: Expense) {
     setEditingId(x.id)
@@ -548,7 +583,7 @@ export default function TeamFinance() {
     if (!editDraft.item_name.trim()) return toast.error('ادخل اسم المنتج')
 
     const clamped = clampToTerm(d)
-    if ((termMin || termMax) && clamped !== d) {
+    if (!inDateBounds(d, termBounds) || clamped !== d) {
       return toast.error('التاريخ خارج نطاق الترم المحدد')
     }
 
@@ -607,339 +642,184 @@ export default function TeamFinance() {
   /* ============================================================================ */
 
   return (
-    <div className="finance99-page teamfinance99-page space-y-6 p-4 md:p-6">
+    <div className="teamfinance129-page space-y-5 p-3 sm:p-4 md:p-6" dir="rtl">
       <PageLoader visible={loading} text="جاري تحميل البيانات..." />
 
-      <PageHero
-        className="finance99-hero"
-        eyebrow="💰 ميزانية الفريق"
-        title="الميزانية والمصروفات"
-        badge={
-          <span className="finance99-year-badge inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold">
-            {currentScoutYear?.name || 'السنة غير محددة'}
-          </span>
-        }
-        description="سجّل مصروفات الترم الحالي، وراجع موقف الميزانية والمتبقي بشكل أسرع وأوضح."
-      />
-
-      <SectionCard className="finance99-section finance99-scope" title="اختيار النطاق" description="حدّد الفريق والترم قبل التسجيل أو التصدير حتى تبقى الأرقام متسقة مع الفترة الصحيحة.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 items-end">
-          <div className={`${(isAdmin || isGlobalFinance) ? '' : 'opacity-60 pointer-events-none'}`}>
-            <label className="text-sm">الفريق</label>
-            <select className="border rounded-2xl p-2.5 w-full min-w-0 cursor-pointer" value={teamId} onChange={e=>setTeamId(e.target.value)}>
-              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            {!(isAdmin || isGlobalFinance) && <div className="text-xs text-gray-500">لا يمكن تغيير الفريق إلا للأدمن/المسؤول العام</div>}
-          </div>
-
+      <section
+        className="teamfinance129-hero"
+        style={{ backgroundImage: `linear-gradient(90deg, rgba(7,35,72,.98) 0%, rgba(9,49,92,.95) 45%, rgba(9,49,92,.42) 72%, rgba(9,49,92,.14) 100%), url(${scoutCompassScarf})` }}
+      >
+        <div className="teamfinance129-hero-copy">
+          <div className="teamfinance129-hero-icon" aria-hidden="true">◉</div>
           <div>
-            <label className="text-sm">الترم</label>
-            <select className="border rounded-2xl p-2.5 w-full min-w-0 cursor-pointer" value={termId} onChange={e=>setTermId(e.target.value)}>
-              {terms.map(t => <option key={t.id} value={t.id}>{t.year} — {t.name}</option>)}
-            </select>
-            {termMeta?.start_date && termMeta?.end_date && (
-              <div className="text-[11px] text-gray-500 mt-1">
-                نطاق الترم: {termMeta.start_date} → {termMeta.end_date}
-              </div>
-            )}
+            <div className="teamfinance129-eyebrow">💰 مالية الفريق</div>
+            <h1>إدارة مالية الفريق</h1>
+            <p>متابعة ميزانية الترم ومصروفات الفريق وحالة التسليم من نفس البيانات الحالية.</p>
           </div>
         </div>
-      </SectionCard>
+        <div className="teamfinance129-hero-meta">
+          <span>{currentScoutYear?.name || 'السنة غير محددة'}</span>
+          <strong>{selectedTeamName}</strong>
+        </div>
+      </section>
 
-      <div className="finance99-metrics grid grid-cols-1 md:grid-cols-3 gap-3">
-        <MetricCard label="ميزانية الترم" value={budget !== null ? egp(budget) : '—'} accent="sky" />
-        <MetricCard label="المصروف" value={egp(spent)} accent="amber" />
-        <MetricCard
-          label="المتبقي"
-          value={egp(remaining)}
-          hint={status==='low' ? 'تحذير: أقل من 25%' : status==='depleted' ? 'انتهت الميزانية' : 'الوضع المالي مستقر'}
-          accent={status==='depleted' ? 'rose' : status==='low' ? 'amber' : 'emerald'}
-        />
-      </div>
+      <section className="teamfinance129-kpis" aria-label="ملخص مالي">
+        <article className="teamfinance129-kpi teamfinance129-kpi-blue">
+          <div className="teamfinance129-kpi-icon">▦</div>
+          <div><span>عدد العمليات</span><strong>{expenses.length}</strong><small>{deliveredExpensesCount} مُسلّم · {pendingExpensesCount} غير مُسلّم</small></div>
+        </article>
+        <article className="teamfinance129-kpi teamfinance129-kpi-green">
+          <div className="teamfinance129-kpi-icon">⌁</div>
+          <div><span>ميزانية الترم</span><strong>{budget !== null ? egp(budget) : '—'}</strong><small>{selectedTermLabel}</small></div>
+        </article>
+        <article className="teamfinance129-kpi teamfinance129-kpi-red">
+          <div className="teamfinance129-kpi-icon">↗</div>
+          <div><span>إجمالي المصروفات</span><strong>{egp(spent)}</strong><small>{Math.round(spentPercent)}% من الميزانية</small></div>
+        </article>
+        <article className={`teamfinance129-kpi ${status === 'depleted' ? 'teamfinance129-kpi-red' : status === 'low' ? 'teamfinance129-kpi-amber' : 'teamfinance129-kpi-purple'}`}>
+          <div className="teamfinance129-kpi-icon">▣</div>
+          <div><span>الرصيد المتبقي</span><strong>{egp(remaining)}</strong><small>{budgetStateLabel}</small></div>
+        </article>
+      </section>
 
-      {/* Form */}
-      {gate.canWriteExpense(teamId) && (
-        <section className="finance99-panel finance99-add-expense space-y-3">
-          <h2 className="finance99-panel-title text-lg font-semibold">إضافة مصروف</h2>
+      <section className="teamfinance129-toolbar">
+        <div className={`teamfinance129-field ${(isAdmin || isGlobalFinance) ? '' : 'is-disabled'}`}>
+          <label>الفريق</label>
+          <select value={teamId} onChange={e=>setTeamId(e.target.value)} disabled={!(isAdmin || isGlobalFinance)}>
+            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+        <div className="teamfinance129-field">
+          <label>الترم</label>
+          <select value={termId} onChange={e=>setTermId(e.target.value)}>
+            {terms.map(t => <option key={t.id} value={t.id}>{t.year} — {t.name}</option>)}
+          </select>
+        </div>
+        <div className="teamfinance129-term-range">
+          <span>الفترة الحالية</span>
+          <strong>{termMeta?.start_date && termMeta?.end_date ? `${termMeta.start_date} ← ${termMeta.end_date}` : selectedTermLabel}</strong>
+        </div>
+        {gate.canWriteExpense(teamId) && (
+          <button type="button" className="teamfinance129-primary" onClick={()=>document.getElementById('teamfinance-add-expense')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+            + إضافة مصروف
+          </button>
+        )}
+      </section>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-2 items-end">
-            <div className="md:col-span-2">
-              <label className="text-sm">التاريخ</label>
-              {hasTermDates && !useCustomDate ? (
-                <>
-                  <select
-                    className="border rounded-xl p-2 w-full min-w-0 cursor-pointer"
-                    value={exDate}
-                    onChange={e=>onSelectDateChange(e.target.value)}
-                  >
-                    {termDates.map(d => (
-                      <option key={d.id} value={d.meeting_date}>{d.meeting_date}</option>
-                    ))}
-                    <option value="__custom__">— تاريخ آخر (داخل نطاق الترم) —</option>
-                  </select>
-                  <div className="text-[11px] text-gray-500 mt-1">اختر تاريخًا من جدول الترم أو اختر “تاريخ آخر”.</div>
-                </>
-              ) : (
-                <>
-                  <input
-                    type="date"
-                    className="border rounded-xl p-2 w-full min-w-0"
-                    value={exDate}
-                    min={termMin || undefined}
-                    max={termMax || undefined}
-                    onChange={e=>setExDate(e.target.value)}
-                  />
-                  {hasTermDates && (
-                    <button
-                      type="button"
-                      className="text-[12px] underline mt-1"
-                      onClick={()=>{
-                        if (termDates.length) { setUseCustomDate(false); setExDate(termDates[0].meeting_date) }
-                      }}
-                    >
-                      الرجوع لاختيار من جدول الترم
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="sm:col-span-2 md:col-span-2">
-              <label className="text-sm">اسم المنتج</label>
-              <input
-                className="border rounded-xl p-2 w-full min-w-0"
-                value={exName}
-                onChange={e=>setExName(e.target.value)}
-                placeholder="مثلاً: أدوات..."
-              />
-            </div>
-
-            <div>
-              <label className="text-sm">العدد</label>
-              <input type="number" min={1} className="border rounded-xl p-2 w-full min-w-0" value={exQty} onChange={e=>setExQty(e.target.value as any)} />
-            </div>
-
-            <div>
-              <label className="text-sm">سعر القطعة</label>
-              <input type="number" min={0} step={0.01} className="border rounded-xl p-2 w-full min-w-0" value={exUnit} onChange={e=>setExUnit(e.target.value as any)} />
-            </div>
-
-            {/* جديد: تمّ التسليم؟ */}
-            <div className="md:col-span-2">
-              <label className="text-sm">تمّ التسليم؟</label>
-              <div className="flex items-center gap-2 p-2 border rounded-xl">
-                <input
-                  type="checkbox"
-                  checked={exDelivered}
-                  onChange={e=>setExDelivered(e.target.checked)}
-                />
-                <span className="text-sm text-gray-700">مُسلّم</span>
-              </div>
-              <div className="text-[11px] text-gray-500 mt-1">يُمكن تعديلها لاحقًا من الجدول.</div>
-            </div>
-
-            <div className="sm:col-span-2 md:col-span-6 flex justify-end">
-              <LoadingButton loading={savingExp} onClick={addExpense}>إضافة مصروف</LoadingButton>
-            </div>
+      <section className="teamfinance129-insights">
+        <article className="teamfinance129-card teamfinance129-budget-summary">
+          <div className="teamfinance129-card-head"><h2>ملخص الفترة</h2><span>◫</span></div>
+          <div className="teamfinance129-summary-row"><span>ميزانية الترم</span><strong>{budget !== null ? egp(budget) : '—'}</strong></div>
+          <div className="teamfinance129-summary-row is-red"><span>المصروف</span><strong>{egp(spent)}</strong></div>
+          <div className="teamfinance129-summary-row is-green"><span>المتبقي</span><strong>{egp(remaining)}</strong></div>
+          <div className="teamfinance129-progress-wrap">
+            <div className="teamfinance129-progress-label"><span>نسبة الاستهلاك</span><strong>{Math.round(spentPercent)}%</strong></div>
+            <div className="teamfinance129-progress"><i style={{ width: `${spentPercent}%` }} /></div>
+            <small className={status === 'depleted' ? 'is-danger' : status === 'low' ? 'is-warning' : ''}>{budgetStateLabel}</small>
           </div>
-        </section>
-      )}
+        </article>
 
-      {/* Export */}
-      {(isAdmin || isGlobalFinance) && (
-        <section className="finance99-panel finance99-export space-y-3">
-          <h2 className="finance99-panel-title text-lg font-semibold">تصدير Excel (XLSX)</h2>
+        <article className="teamfinance129-card teamfinance129-monthly">
+          <div className="teamfinance129-card-head"><h2>حركة المصروفات</h2><span>▥</span></div>
+          {monthlySpend.length ? (
+            <div className="teamfinance129-bars" aria-label="المصروفات الشهرية">
+              {monthlySpend.map(item => (
+                <div className="teamfinance129-bar-item" key={item.key} title={`${item.label}: ${egp(item.value)}`}>
+                  <div className="teamfinance129-bar-value">{Math.round(item.value).toLocaleString('en-EG')}</div>
+                  <div className="teamfinance129-bar-track"><i style={{ height: `${Math.max(8, (item.value / maxMonthlySpend) * 100)}%` }} /></div>
+                  <span>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          ) : <div className="teamfinance129-empty">لا توجد مصروفات لعرض الحركة المالية.</div>}
+        </article>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 items-end">
-            <div>
-              <label className="text-sm">محتوى الExcel</label>
-              <select className="border rounded-xl p-2 w-full min-w-0" value={exportMode} onChange={e=>setExportMode(e.target.value as ExportMode)}>
-                <option value="term">الترم الحالي — شيت للترم</option>
-                <option value="year">سنة معيّنة — شيت لكل ترم</option>
-                <option value="all">كل الترمات — شيت لكل ترم</option>
+        <article className="teamfinance129-card teamfinance129-delivery">
+          <div className="teamfinance129-card-head"><h2>حالة التسليم</h2><span>✓</span></div>
+          <div className="teamfinance129-donut" style={{ background: `conic-gradient(#16a34a 0 ${expenses.length ? (deliveredExpensesCount / expenses.length) * 100 : 0}%, #e5e7eb 0 100%)` }}>
+            <div><strong>{expenses.length ? Math.round((deliveredExpensesCount / expenses.length) * 100) : 0}%</strong><span>مُسلّم</span></div>
+          </div>
+          <div className="teamfinance129-delivery-grid">
+            <div><strong>{deliveredExpensesCount}</strong><span>مُسلّم</span></div>
+            <div><strong>{pendingExpensesCount}</strong><span>غير مُسلّم</span></div>
+          </div>
+        </article>
+      </section>
+
+      <section className="teamfinance129-card teamfinance129-expenses-card">
+        <div className="teamfinance129-list-head">
+          <div>
+            <span className="teamfinance129-eyebrow-dark">📋 المصروفات المسجلة</span>
+            <h2>قائمة العمليات المالية</h2>
+            <p>نفس مصروفات الفريق الحالية مع حالة التسليم والإجراءات الموجودة.</p>
+          </div>
+          {(isAdmin || isGlobalFinance) && (
+            <div className="teamfinance129-export-inline">
+              <select value={exportMode} onChange={e=>setExportMode(e.target.value as ExportMode)} aria-label="نوع التصدير">
+                <option value="term">الترم الحالي</option>
+                <option value="year">سنة معيّنة</option>
+                <option value="all">كل الترمات</option>
               </select>
-            </div>
-
-            {exportMode === 'term' && (
-              <div>
-                <label className="text-sm">الترم </label>
-                <select className="border rounded-xl p-2 w-full min-w-0" value={termId} onChange={e=>setTermId(e.target.value)}>
-                  {terms.map(t => <option key={t.id} value={t.id}>{t.year} — {t.name}</option>)}
+              {exportMode === 'year' && (
+                <select value={exportYear} onChange={e=>setExportYear(Number(e.target.value))} aria-label="سنة التصدير">
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
-              </div>
-            )}
-
-            {exportMode === 'year' && (
-              <>
-                <div>
-                  <label className="text-sm">السنة</label>
-                  <select className="border rounded-xl p-2 w-full min-w-0" value={exportYear} onChange={e=>setExportYear(Number(e.target.value))}>
-                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-sm">نطاق الفرق</label>
-                  <select className="border rounded-xl p-2 w-full min-w-0" value={exportTeamScope} onChange={e=>setExportTeamScope(e.target.value as any)}>
-                    <option value="all">كل الفرق</option>
-                    <option value="one">فريق واحد</option>
-                  </select>
-                </div>
-                {exportTeamScope === 'one' && (
-                  <div>
-                    <label className="text-sm">الفريق</label>
-                    <select className="border rounded-xl p-2 w-full min-w-0" value={exportTeamId} onChange={e=>setExportTeamId(e.target.value)}>
-                      {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                )}
-              </>
-            )}
-
-            <div className="md:col-span-1 text-end">
-              <LoadingButton className="w-full sm:w-auto" loading={exporting} onClick={handleExport}>
-                {exporting ? 'جارِ التحضير...' : 'تصدير XLSX'}
-              </LoadingButton>
+              )}
+              {exportMode === 'year' && (
+                <select value={exportTeamScope} onChange={e=>setExportTeamScope(e.target.value as any)} aria-label="نطاق الفرق">
+                  <option value="all">كل الفرق</option><option value="one">فريق واحد</option>
+                </select>
+              )}
+              {exportMode === 'year' && exportTeamScope === 'one' && (
+                <select value={exportTeamId} onChange={e=>setExportTeamId(e.target.value)} aria-label="الفريق للتصدير">
+                  {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              )}
+              <LoadingButton loading={exporting} onClick={handleExport}>{exporting ? 'جارِ التحضير...' : 'تصدير Excel'}</LoadingButton>
             </div>
-          </div>
+          )}
+        </div>
 
-          <div className="text-xs text-gray-500">
-            * كل ترم في شيت منفصل بعنوانه، وبين كل فريق سطر فاضي، وجميع صفوف البيانات والهيدر بحدود.
-          </div>
-        </section>
-      )}
-
-      {/* Table */}
-      <section className="finance99-panel finance99-expense-list space-y-3">
-        <h2 className="finance99-panel-title text-lg font-semibold">المصروفات</h2>
-        <div className="finance99-table-wrap border rounded-2xl w-full max-w-full overflow-x-auto">
-          <table className="finance99-table w-full min-w-[1000px] text-xs sm:text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-start whitespace-nowrap">التاريخ</th>
-                <th className="p-2 text-start">المنتج</th>
-                <th className="p-2 text-center whitespace-nowrap">العدد</th>
-                <th className="p-2 text-center whitespace-nowrap">سعر القطعة</th>
-                <th className="p-2 text-center whitespace-nowrap">الإجمالي</th>
-                <th className="p-2 text-center whitespace-nowrap">تمّ التسليم؟</th>{/* جديد */}
-                <th className="p-2 text-center whitespace-nowrap">إجراءات</th>
-              </tr>
-            </thead>
+        <div className="teamfinance129-table-wrap">
+          <table className="teamfinance129-table">
+            <thead><tr><th>#</th><th>التاريخ</th><th>البيان</th><th>العدد</th><th>سعر القطعة</th><th>الإجمالي</th><th>التسليم</th><th>إجراءات</th></tr></thead>
             <tbody>
-              {expenses.map(x => {
+              {expenses.map((x, index) => {
                 const isEditing = editingId === x.id
                 const totalDisp = egp(Number(isEditing ? (Number(editDraft?.qty||0) * Number(editDraft?.unit_price||0)) : x.total))
-                const canToggle = !!canModify
                 return (
-                  <tr key={x.id} className="border-t">
-                    <td className="p-2">
-                      {!isEditing ? (
-                        sanitizeForUI(x.expense_date)
-                      ) : (
-                        <input
-                          type="date"
-                          className="border rounded-xl p-1"
-                          value={editDraft?.expense_date ?? (x.expense_date || '').slice(0,10)}
-                          min={termMin || undefined}
-                          max={termMax || undefined}
-                          onChange={e => setEditDraft(d => d ? { ...d, expense_date: e.target.value } :
-                            { expense_date: e.target.value, item_name: x.item_name, qty: x.qty, unit_price: x.unit_price })}
-                        />
-                      )}
-                    </td>
-
-                    <td className="p-2">
-                      {!isEditing ? (
-                        sanitizeForUI(x.item_name)
-                      ) : (
-                        <input
-                          className="border rounded-xl p-1 w-full"
-                          value={editDraft?.item_name ?? x.item_name}
-                          onChange={e => setEditDraft(d => d ? { ...d, item_name: e.target.value } :
-                            { expense_date: (x.expense_date||'').slice(0,10), item_name: e.target.value, qty: x.qty, unit_price: x.unit_price })}
-                        />
-                      )}
-                    </td>
-
-                    <td className="p-2 text-center">
-                      {!isEditing ? (
-                        x.qty
-                      ) : (
-                        <input
-                          type="number"
-                          min={1}
-                          className="border rounded-xl p-1 w-24 text-center"
-                          value={editDraft?.qty ?? x.qty}
-                          onChange={e => setEditDraft(d => d ? { ...d, qty: e.target.value as any } :
-                            { expense_date: (x.expense_date||'').slice(0,10), item_name: x.item_name, qty: e.target.value as any, unit_price: x.unit_price })}
-                        />
-                      )}
-                    </td>
-
-                    <td className="p-2 text-center">
-                      {!isEditing ? (
-                        egp(Number(x.unit_price))
-                      ) : (
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.01}
-                          className="border rounded-xl p-1 w-28 text-center"
-                          value={editDraft?.unit_price ?? x.unit_price}
-                          onChange={e => setEditDraft(d => d ? { ...d, unit_price: e.target.value as any } :
-                            { expense_date: (x.expense_date||'').slice(0,10), item_name: x.item_name, qty: x.qty, unit_price: e.target.value as any })}
-                        />
-                      )}
-                    </td>
-
-                    <td className="p-2 text-center">{totalDisp}</td>
-
-                    {/* عمود تمّ التسليم */}
-                    <td className="p-2 text-center">
-                      <label className={`inline-flex items-center gap-2 px-2 py-1 rounded-full border ${x.is_delivered?'bg-emerald-50 border-emerald-300 text-emerald-700':'bg-gray-50 border-gray-300 text-gray-700'}`}>
-                        <input
-                          type="checkbox"
-                          checked={!!x.is_delivered}
-                          disabled={!canToggle || togglingId===x.id}
-                          onChange={e=>toggleDelivered(x.id, e.target.checked)}
-                        />
-                        <span className="text-[12px]">{x.is_delivered ? 'مُسلّم' : 'غير مُسلَّم'}</span>
-                      </label>
-                    </td>
-
-                    <td className="p-2 text-center">
-                      {!canModify ? (
-                        <span className="text-gray-400 text-xs">—</span>
-                      ) : !isEditing ? (
-                        <div className="flex items-center justify-center gap-2">
-                          {/* <button className="btn border" onClick={()=>startEditRow(x)}>تعديل</button> */}
-                          <button
-                            className="btn border"
-                            disabled={deletingId===x.id}
-                            onClick={()=>deleteRow(x.id)}
-                          >
-                            {deletingId===x.id ? '...' : 'حذف'}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-center gap-2">
-                          <LoadingButton
-                            loading={savingEditId===x.id}
-                            onClick={()=>saveEditRow(x.id)}
-                          >
-                            حفظ
-                          </LoadingButton>
-                          <button className="btn border" onClick={cancelEditRow}>إلغاء</button>
-                        </div>
-                      )}
-                    </td>
+                  <tr key={x.id}>
+                    <td className="teamfinance129-row-index">{index + 1}</td>
+                    <td>{!isEditing ? sanitizeForUI(x.expense_date) : <input type="date" value={editDraft?.expense_date ?? (x.expense_date || '').slice(0,10)} min={termMin || undefined} max={termMax || undefined} onChange={e=>setEditDraft(d=>d?{...d,expense_date:e.target.value}:{expense_date:e.target.value,item_name:x.item_name,qty:x.qty,unit_price:x.unit_price})}/>}</td>
+                    <td className="teamfinance129-item-name">{!isEditing ? sanitizeForUI(x.item_name) : <input value={editDraft?.item_name ?? x.item_name} onChange={e=>setEditDraft(d=>d?{...d,item_name:e.target.value}:{expense_date:(x.expense_date||'').slice(0,10),item_name:e.target.value,qty:x.qty,unit_price:x.unit_price})}/>}</td>
+                    <td>{!isEditing ? x.qty : <input type="number" min={1} value={editDraft?.qty ?? x.qty} onChange={e=>setEditDraft(d=>d?{...d,qty:e.target.value as any}:{expense_date:(x.expense_date||'').slice(0,10),item_name:x.item_name,qty:e.target.value as any,unit_price:x.unit_price})}/>}</td>
+                    <td>{!isEditing ? egp(Number(x.unit_price)) : <input type="number" min={0} step={0.01} value={editDraft?.unit_price ?? x.unit_price} onChange={e=>setEditDraft(d=>d?{...d,unit_price:e.target.value as any}:{expense_date:(x.expense_date||'').slice(0,10),item_name:x.item_name,qty:x.qty,unit_price:e.target.value as any})}/>}</td>
+                    <td className="teamfinance129-total">{totalDisp}</td>
+                    <td><label className={`teamfinance129-delivery-chip ${x.is_delivered ? 'is-done' : ''}`}><input type="checkbox" checked={!!x.is_delivered} disabled={!canModify || togglingId===x.id} onChange={e=>toggleDelivered(x.id,e.target.checked)}/><span>{x.is_delivered ? 'مُسلّم' : 'غير مُسلّم'}</span></label></td>
+                    <td>{!canModify ? <span className="teamfinance129-muted">—</span> : !isEditing ? <button className="teamfinance129-danger-action" disabled={deletingId===x.id} onClick={()=>deleteRow(x.id)}>{deletingId===x.id?'...':'حذف'}</button> : <div className="teamfinance129-edit-actions"><LoadingButton loading={savingEditId===x.id} onClick={()=>saveEditRow(x.id)}>حفظ</LoadingButton><button onClick={cancelEditRow}>إلغاء</button></div>}</td>
                   </tr>
                 )
               })}
-              {expenses.length === 0 && <tr><td className="p-3 text-center text-gray-500" colSpan={7}>لا توجد مصروفات</td></tr>}
+              {expenses.length === 0 && <tr><td colSpan={8} className="teamfinance129-empty-row">لا توجد مصروفات مسجلة لهذا الفريق في الترم المحدد.</td></tr>}
             </tbody>
           </table>
         </div>
       </section>
+
+      {gate.canWriteExpense(teamId) && (
+        <section id="teamfinance-add-expense" className="teamfinance129-card teamfinance129-form-card">
+          <div className="teamfinance129-card-head"><div><span className="teamfinance129-eyebrow-dark">＋ عملية جديدة</span><h2>إضافة مصروف</h2></div><span>💳</span></div>
+          <div className="teamfinance129-form-grid">
+            <div className="teamfinance129-field"><label>التاريخ</label>{hasTermDates && !useCustomDate ? <><select value={exDate} onChange={e=>onSelectDateChange(e.target.value)}>{termDates.map(d=><option key={d.id} value={d.meeting_date}>{d.meeting_date}</option>)}<option value="__custom__">— تاريخ آخر داخل الترم —</option></select><small>اختر تاريخًا من جدول الترم أو تاريخًا آخر.</small></> : <><input type="date" value={exDate} min={termMin||undefined} max={termMax||undefined} onChange={e=>setExDate(e.target.value)}/>{hasTermDates && <button type="button" className="teamfinance129-text-action" onClick={()=>{if(termDates.length){setUseCustomDate(false);setExDate(termDates[0].meeting_date)}}}>الرجوع لجدول الترم</button>}</>}</div>
+            <div className="teamfinance129-field teamfinance129-field-wide"><label>اسم المنتج</label><input value={exName} onChange={e=>setExName(e.target.value)} placeholder="مثلاً: أدوات أو خامات..."/></div>
+            <div className="teamfinance129-field"><label>العدد</label><input type="number" min={1} value={exQty} onChange={e=>setExQty(e.target.value as any)}/></div>
+            <div className="teamfinance129-field"><label>سعر القطعة</label><input type="number" min={0} step={0.01} value={exUnit} onChange={e=>setExUnit(e.target.value as any)}/></div>
+            <label className="teamfinance129-delivered-toggle"><input type="checkbox" checked={exDelivered} onChange={e=>setExDelivered(e.target.checked)}/><span><strong>تم التسليم</strong><small>يمكن تعديل الحالة لاحقًا من الجدول.</small></span></label>
+            <div className="teamfinance129-form-submit"><LoadingButton loading={savingExp} onClick={addExpense}>حفظ المصروف</LoadingButton></div>
+          </div>
+        </section>
+      )}
     </div>
   )
+
 }

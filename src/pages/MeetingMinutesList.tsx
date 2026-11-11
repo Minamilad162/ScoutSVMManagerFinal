@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../components/AuthProvider'
 import { PageHero } from '../components/ui/PageHero'
+import { MetricCard } from '../components/ui/MetricCard'
 import { SectionCard } from '../components/ui/SectionCard'
 import { EmptyState } from '../components/ui/EmptyState'
 import { InlineAlert } from '../components/ui/InlineAlert'
@@ -157,189 +158,53 @@ export default function MeetingMinutesList() {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-5">
+    <div className="minutes125-page space-y-5 p-4 md:p-6">
       <PageHero
+        className="minutes125-hero"
         eyebrow="سجل الاجتماعات والمتابعة"
-        title="المحاضر"
-        description={`اعرض محاضر السنة الكشفية الحالية${currentScoutYear ? ` (${currentScoutYear.name})` : ''}، تابع تنفيذ التاسكات المرتبطة بها، وراجع حالة الإنجاز من مكان واحد بشكل أوضح وأسرع. الفلاتر الزمنية اختيارية، ولو تركتها فارغة سيظهر لك كل ما يخص السنة الحالية.`}
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={loadData}
-              className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-            >
-              تحديث
-            </button>
-
-            {canCreate && (
-              <button
-                type="button"
-                onClick={() => navigate('/app/meeting-minutes/new')}
-                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-              >
-                + إضافة محضر
-              </button>
-            )}
-          </>
-        }
+        title="محاضر الاجتماعات"
+        description={`محاضر السنة الكشفية${currentScoutYear ? ` ${currentScoutYear.name}` : ''}، مع الحضور والتاسكات وحالة التنفيذ في شاشة واحدة. فتح المحضر ومتابعة التاسكات يستمران بنفس الـworkflow الحالي.`}
+        actions={<><button type="button" onClick={loadData} className="minutes125-secondary">↻ تحديث</button>{canCreate&&<button type="button" onClick={()=>navigate('/app/meeting-minutes/new')} className="minutes125-primary">+ إضافة محضر جديد</button>}</>}
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
-        <StatCard label="عدد المحاضر" value={totals.minutes} />
-        <StatCard label="إجمالي التاسكات" value={totals.tasks} />
-        <StatCard label="لم يبدأ" value={totals.pending} />
-        <StatCard label="جارٍ التنفيذ" value={totals.inProgress} />
-        <StatCard label="تم" value={totals.done} />
-        <StatCard label="متأخر" value={totals.overdue} danger={totals.overdue > 0} />
+      <div className="minutes125-kpis grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="إجمالي المحاضر" value={totals.minutes} hint="في النطاق الحالي" accent="sky" />
+        <MetricCard label="إجمالي التاسكات" value={totals.tasks} hint={`${totals.inProgress} جارٍ التنفيذ`} accent="indigo" />
+        <MetricCard label="تم التنفيذ" value={totals.done} hint="تاسكات مكتملة" accent="emerald" />
+        <MetricCard label="متأخر" value={totals.overdue} hint={totals.overdue>0?'يحتاج متابعة':'لا توجد تأخيرات'} accent={totals.overdue>0?'rose':'amber'} />
       </div>
 
-      <SectionCard title="الفلاتر" description="حدّد الفترة أو ابحث بعنوان المحضر للوصول للبيانات بسرعة. لو تركت التاريخين فارغين سيظهر كل ما يخص السنة الحالية.">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              من تاريخ
-            </label>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              إلى تاريخ
-            </label>
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              بحث بالعنوان
-            </label>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="مثلاً: اجتماع قادة"
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div className="flex items-end gap-2">
-            <button
-              type="button"
-              onClick={loadData}
-              className="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-            >
-              تطبيق الفلترة
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setFromDate('')
-                setToDate('')
-                setQuery('')
-              }}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-            >
-              مسح
-            </button>
-          </div>
+      <SectionCard className="minutes125-filter-card" title="البحث والفلاتر" description="اترك التاريخ فارغًا لعرض كل محاضر السنة الحالية، أو ضيّق النتائج بعنوان المحضر وفترة محددة.">
+        <div className="minutes125-filters">
+          <label><span>بحث بالعنوان</span><input type="text" value={query} onChange={e=>setQuery(e.target.value)} placeholder="مثلاً: اجتماع قادة" /></label>
+          <label><span>من تاريخ</span><input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} /></label>
+          <label><span>إلى تاريخ</span><input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} /></label>
+          <div className="minutes125-filter-actions"><button type="button" onClick={loadData} className="minutes125-primary">تطبيق الفلترة</button><button type="button" onClick={()=>{setFromDate('');setToDate('');setQuery('')}} className="minutes125-secondary">مسح</button></div>
         </div>
       </SectionCard>
 
-      {error && (
-        <InlineAlert tone="error" title="تعذر تحميل المحاضر">
-          {error}
-        </InlineAlert>
-      )}
+      {error && <InlineAlert tone="error" title="تعذر تحميل المحاضر">{error}</InlineAlert>}
 
       {loading ? (
         <EmptyState title="جاري تحميل المحاضر..." description="لحظات وسيتم عرض المحاضر والتاسكات المرتبطة بها." />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          title="لا توجد محاضر في الفترة المحددة"
-          description="جرّب تعديل التاريخ أو أضف محضرًا جديدًا لبدء المتابعة."
-          action={
-            canCreate ? (
-              <button
-                type="button"
-                onClick={() => navigate('/app/meeting-minutes/new')}
-                className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-              >
-                + إضافة أول محضر
-              </button>
-            ) : undefined
-          }
-        />
+      ) : rows.length===0 ? (
+        <EmptyState title="لا توجد محاضر في الفترة المحددة" description="جرّب تعديل التاريخ أو أضف محضرًا جديدًا لبدء المتابعة." action={canCreate?<button type="button" onClick={()=>navigate('/app/meeting-minutes/new')} className="minutes125-primary">+ إضافة أول محضر</button>:undefined} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {rows.map((row) => (
-            <div
-              key={row.id}
-              className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md"
-            >
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <div className="text-lg font-bold text-slate-800">
-                    {row.title?.trim() || 'محضر بدون عنوان'}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    تاريخ الاجتماع: {fmtDate(row.meeting_date)}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <StatusPill label={`الحضور ${row.attendees_count || 0}`} />
-                  <StatusPill label={`التاسكات ${row.tasks_count || 0}`} />
-                  <StatusPill label={`تم ${row.done_count || 0}`} tone="green" />
-                  <StatusPill label={`لم يبدأ ${row.pending_count || 0}`} tone="yellow" />
-                  <StatusPill
-                    label={`متأخر ${row.overdue_count || 0}`}
-                    tone={(row.overdue_count || 0) > 0 ? 'red' : 'slate'}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-                <MiniInfo label="جارٍ التنفيذ" value={row.in_progress_count || 0} />
-                <MiniInfo label="ملغي" value={row.cancelled_count || 0} />
-                <MiniInfo label="تاريخ الإنشاء" value={fmtDate(row.created_at)} />
-                <MiniInfo label="آخر تعديل" value={fmtDate(row.updated_at)} />
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Link
-                  to={`/app/meeting-minutes/${row.id}`}
-                  className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                >
-                  فتح المحضر
-                </Link>
-
-                <Link
-                  to={`/app/meeting-tasks?minuteId=${row.id}`}
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-                >
-                  متابعة التاسكات
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
+        <SectionCard className="minutes125-table-card" title={`قائمة المحاضر — ${rows.length}`} description="اضغط فتح المحضر للمراجعة والتعديل، أو انتقل مباشرة إلى متابعة التاسكات المرتبطة به.">
+          <div className="minutes125-table-wrap">
+            <table className="minutes125-table min-w-[1050px]">
+              <thead><tr><th>موضوع الاجتماع</th><th>تاريخ الاجتماع</th><th>الحضور</th><th>التاسكات</th><th>لم يبدأ</th><th>جارٍ</th><th>تم</th><th>متأخر</th><th>آخر تعديل</th><th>الإجراءات</th></tr></thead>
+              <tbody>{rows.map(row=><tr key={row.id} className={(row.overdue_count||0)>0?'has-overdue':''}>
+                <td><div className="minutes125-title"><span>☷</span><strong>{row.title?.trim()||'محضر بدون عنوان'}</strong></div></td>
+                <td>{fmtDate(row.meeting_date)}</td><td><StatusPill label={String(row.attendees_count||0)} /></td><td><StatusPill label={String(row.tasks_count||0)} /></td><td><StatusPill label={String(row.pending_count||0)} tone="yellow" /></td><td><StatusPill label={String(row.in_progress_count||0)} /></td><td><StatusPill label={String(row.done_count||0)} tone="green" /></td><td><StatusPill label={String(row.overdue_count||0)} tone={(row.overdue_count||0)>0?'red':'slate'} /></td><td>{fmtDate(row.updated_at)}</td>
+                <td><div className="minutes125-actions"><Link to={`/app/meeting-minutes/${row.id}`}>فتح المحضر</Link><Link className="secondary" to={`/app/meeting-tasks?minuteId=${row.id}`}>التاسكات</Link></div></td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </SectionCard>
       )}
 
-      <div className="text-xs text-slate-400">
-        المستخدم الحالي: {user?.name || user?.email || '-'}
-      </div>
+      <div className="minutes125-user">المستخدم الحالي: {user?.name||user?.email||'-'}</div>
     </div>
   )
 }

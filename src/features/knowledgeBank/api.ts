@@ -1,4 +1,6 @@
 import { scoutYearFrom, supabase } from '../../lib/supabase'
+import { fetchScoutYearById } from '../reference/api'
+import { getScoutYearBounds, getTermYearBounds, inDateBounds } from '../../lib/scoutYearScope'
 
 export type KnowledgeRole = { role_slug: string; team_id: string | null }
 export type KnowledgeAnswerStatus = 'answered' | 'blocked' | 'unsupported' | 'empty'
@@ -59,7 +61,7 @@ type YearResponsibilityEvent = { id: string; title: string; event_date: string |
 type YearResponsibilityAssignment = { event_id: string; member_id: string }
 type TermRow = { id: string; name: string; scout_year_id?: string | null; year?: number | null; start_date?: string | null; end_date?: string | null; is_current?: boolean | null }
 type BudgetRow = { team_id: string; term_id: string; amount_total: number | string | null }
-type ExpenseRow = { team_id: string; term_id: string; total: number | string | null; item_name?: string | null }
+type ExpenseRow = { team_id: string; term_id: string; total: number | string | null; item_name?: string | null; expense_date?: string | null }
 type FinanceEventRow = { id: string; name: string; event_date: string | null; notes?: string | null }
 type FinanceEventBudgetRow = { event_id: string; item_name: string; qty: number | string | null; unit_price: number | string | null; line_total: number | string | null }
 type FinanceEventExpenseRow = { event_id: string; expense_date: string | null; item_name: string; qty: number | string | null; unit_price: number | string | null; total: number | string | null }
@@ -1212,16 +1214,13 @@ function resolveTermFromQuestion(question: string, terms: TermRow[]) {
 }
 
 function filterTermsByQuestionYear(question: string, terms: TermRow[], currentScoutYearId: string | null) {
-  const year = targetQuestionYear(question)
-  if (year) {
-    const filtered = terms.filter((term) => term.year === year || dateYear(term.start_date) === year || dateYear(term.end_date) === year)
-    return filtered.length ? filtered : terms
-  }
-  if (currentScoutYearId) {
-    const current = terms.filter((term) => term.scout_year_id === currentScoutYearId || term.is_current)
-    return current.length ? current : terms
-  }
-  return terms.filter((term) => term.is_current) || terms
+  // Never fall back to unscoped/old-year terms for a normal current-year question.
+  if (!currentScoutYearId) return []
+  const inSelectedYear = terms.filter((term) => term.scout_year_id === currentScoutYearId)
+  const requestedYear = targetQuestionYear(question)
+  return requestedYear
+    ? inSelectedYear.filter((term) => term.year === requestedYear || dateYear(term.start_date) === requestedYear || dateYear(term.end_date) === requestedYear)
+    : inSelectedYear
 }
 
 function resolveFinanceEvent(question: string, events: FinanceEventRow[]) {
@@ -1250,6 +1249,10 @@ async function answerFinanceEvent(params: KnowledgeQuestionContext): Promise<Kno
     }
   }
 
+  const eventYear = params.scoutYearId ? await fetchScoutYearById(params.scoutYearId) : null
+  const eventBounds = getScoutYearBounds(eventYear)
+  if (!eventBounds) return { status: 'empty', title: 'لا توجد سنة كشفية محددة', message: 'حدّد السنة الكشفية أولاً لعرض Events مالية.', confidence: 'high' }
+
   let eventData: FinanceEventRow[] = []
   try {
     const { data, error } = await supabase
@@ -1272,10 +1275,8 @@ async function answerFinanceEvent(params: KnowledgeQuestionContext): Promise<Kno
   }
 
   const targetYear = targetQuestionYear(params.question)
-  const filteredEvents = targetYear
-    ? eventData.filter((event) => dateYear(event.event_date) === targetYear)
-    : eventData
-  const event = resolveFinanceEvent(params.question, filteredEvents.length ? filteredEvents : eventData)
+  const filteredEvents = eventData.filter((event) => inDateBounds(event.event_date, eventBounds) && (!targetYear || dateYear(event.event_date) === targetYear))
+  const event = resolveFinanceEvent(params.question, filteredEvents)
   const asksBreakdown = hasAny(normalizeArabic(params.question), financeBreakdownTerms)
 
   if (!event && !hasAny(normalizeArabic(params.question), ['كل الايفنتات', 'كل الأحداث', 'كل ال events', 'قائمة الايفنتات', 'قائمه الايفنتات'])) {
@@ -1287,14 +1288,14 @@ async function answerFinanceEvent(params: KnowledgeQuestionContext): Promise<Kno
       interpretation: `تم فهم السؤال كسؤال تكلفة Event${targetYear ? ` لسنة ${targetYear}` : ''}.`,
       confidence: 'low',
       references: [
-        { label: 'Events مالية مقروءة', value: eventData.length },
+        { label: 'Events مالية مقروءة', value: filteredEvents.length },
         { label: 'فلتر السنة', value: targetYear || 'بدون فلتر سنة' },
-        { label: 'أقرب أمثلة', value: eventData.slice(0, 5).map((row) => row.name).join('، ') || 'لا يوجد' },
+        { label: 'أقرب أمثلة', value: filteredEvents.slice(0, 5).map((row) => row.name).join('، ') || 'لا يوجد' },
       ],
     }
   }
 
-  const selectedEvents = event ? [event] : (filteredEvents.length ? filteredEvents : eventData).slice(0, 30)
+  const selectedEvents = event ? [event] : filteredEvents.slice(0, 30)
   const eventIds = selectedEvents.map((row) => row.id)
   if (!eventIds.length) {
     return {
@@ -1304,13 +1305,13 @@ async function answerFinanceEvent(params: KnowledgeQuestionContext): Promise<Kno
       source: 'finance_events',
       interpretation: `تم فهم السؤال كسؤال مالي عن Events${targetYear ? ` لسنة ${targetYear}` : ''}.`,
       confidence: 'medium',
-      references: [{ label: 'Events مالية مقروءة', value: eventData.length }],
+      references: [{ label: 'Events مالية مقروءة', value: filteredEvents.length }],
     }
   }
 
   const [{ data: budgetData, error: budgetError }, { data: expenseData, error: expenseError }] = await Promise.all([
     supabase.from('finance_event_budgets').select('event_id,item_name,qty,unit_price,line_total').in('event_id', eventIds).is('soft_deleted_at', null) as any,
-    supabase.from('finance_event_expenses').select('event_id,expense_date,item_name,qty,unit_price,total').in('event_id', eventIds).is('soft_deleted_at', null) as any,
+    supabase.from('finance_event_expenses').select('event_id,expense_date,item_name,qty,unit_price,total').in('event_id', eventIds).gte('expense_date', eventBounds.start).lte('expense_date', eventBounds.end).is('soft_deleted_at', null) as any,
   ])
   if (budgetError) throw budgetError
   if (expenseError) throw expenseError
@@ -1385,7 +1386,7 @@ async function answerFinanceEvent(params: KnowledgeQuestionContext): Promise<Kno
     interpretation: event ? `تم فهم السؤال كسؤال تكلفة Event: ${event.name}` : `تم فهم السؤال كملخص Events مالية${targetYear ? ` لسنة ${targetYear}` : ''}.`,
     confidence: event ? 'high' : 'medium',
     references: [
-      { label: 'Events مالية مقروءة', value: eventData.length },
+      { label: 'Events مالية مقروءة', value: filteredEvents.length },
       { label: 'Events داخل النتيجة', value: rows.length },
       { label: 'فلتر السنة', value: targetYear || 'بدون فلتر سنة' },
       { label: 'بنود ميزانية مقروءة', value: budgetRows.length },
@@ -1422,13 +1423,16 @@ async function answerTeamFinance(params: KnowledgeQuestionContext): Promise<Know
   const scopedTerms = filterTermsByQuestionYear(params.question, (allTermData || []) as TermRow[], params.scoutYearId)
   const requestedTerm = resolveTermFromQuestion(params.question, scopedTerms)
   const terms = requestedTerm ? [requestedTerm] : scopedTerms
-  const termIds = terms.map((term) => term.id)
+  const year = params.scoutYearId ? await fetchScoutYearById(params.scoutYearId) : null
+  const yearBounds = getScoutYearBounds(year)
+  const scopedFinanceTerms = yearBounds ? terms.filter(term => getTermYearBounds(year, term)) : []
+  const termIds = scopedFinanceTerms.map((term) => term.id)
   if (!termIds.length) {
     return { status: 'empty', title: 'لا توجد ترمات مالية', message: 'لا توجد ترمات مطابقة للسؤال.', source: 'v_terms_with_scout_year', confidence: 'high' }
   }
 
-  let budgetQuery = supabase.from('team_budgets').select('team_id,term_id,amount_total').in('term_id', termIds).is('soft_deleted_at', null) as any
-  let expenseQuery = supabase.from('expenses').select('team_id,term_id,total,item_name').in('term_id', termIds).is('soft_deleted_at', null) as any
+  let budgetQuery = supabase.from('v_team_budgets_effective').select('team_id,term_id,amount_total').in('term_id', termIds).is('soft_deleted_at', null) as any
+  let expenseQuery = supabase.from('expenses').select('team_id,term_id,total,item_name,expense_date').in('term_id', termIds).gte('expense_date', yearBounds!.start).lte('expense_date', yearBounds!.end).is('soft_deleted_at', null) as any
   if (scope.teamIds.length) {
     budgetQuery = budgetQuery.in('team_id', scope.teamIds)
     expenseQuery = expenseQuery.in('team_id', scope.teamIds)
@@ -1439,7 +1443,7 @@ async function answerTeamFinance(params: KnowledgeQuestionContext): Promise<Know
   if (expenseError) throw expenseError
 
   const budgets = (budgetData || []) as BudgetRow[]
-  const expenses = (expenseData || []) as ExpenseRow[]
+  const expenses = ((expenseData || []) as ExpenseRow[]).filter(expense => inDateBounds(expense.expense_date, getTermYearBounds(year, scopedFinanceTerms.find(t => t.id === expense.term_id))))
   const teamMap = new Map(teams.map((team) => [team.id, team]))
   const termMap = new Map(terms.map((term) => [term.id, term]))
   const asksBreakdown = hasAny(normalizeArabic(params.question), financeBreakdownTerms)

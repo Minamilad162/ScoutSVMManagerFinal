@@ -258,16 +258,18 @@ export default function SideNav({ onNavigate }: Props) {
   const items = useMemo<Item[]>(() => {
     if (!user) return []
 
-    const res: Item[] = [{ to: '/app', label: 'الرئيسية' }, { to: '/app/member-profile', label: 'ملفي الشخصي' }, { to: '/app/best-chefs', label: 'أفضل الـ chefs' }, { to: '/app/knowledge-bank', label: 'بنك المعرفة' }]
+    const res: Item[] = [{ to: '/app', label: 'الرئيسية' }, { to: '/app/member-profile', label: 'ملفي الشخصي' }, { to: '/app/best-chefs', label: 'أفضل الـ chefs' }]
 
     if (isAdmin) {
       pushUnique(res, '/app/AdminDashboard', 'لوحة التحكم')
 
       pushUnique(res, '/app/AdminReservationsAll', 'الحجوزات')
+      pushUnique(res, '/app/reservation', 'إدارة الحجوزات المباشرة')
       pushUnique(res, '/app/AdminFieldReservations', 'ادارة الارض')
       pushUnique(res, '/app/AdminAttendance', 'إدارة الحضور')
       pushUnique(res, '/app/AdminFinance', 'ادارة الميزانية')
       pushUnique(res, '/app/MaterialAdmin', 'ادارة الأدوات ')
+      pushUnique(res, '/app/materials', 'الأدوات')
       pushUnique(res, '/app/AdminEvaluations', 'التقييم (أدمن)')
       pushUnique(res, '/app/admin', 'لوحة الإدارة')
       pushUnique(res, '/app/admin-scout-years', 'السنة الكشفية')
@@ -280,12 +282,26 @@ export default function SideNav({ onNavigate }: Props) {
       pushUnique(res, '/app/AdminEvents', 'فعاليات')
       if (SHOW_EVALUATION_QUESTIONS) pushUnique(res, '/app/AdminEvalQuestions', 'أسئلة التقييم')
       pushUnique(res, '/app/financeEvent', 'ميزانية المجموعة')
-      pushUnique(res, '/app/MaterialsReturnApprove', 'تسليم العهده')
+      pushUnique(res, '/app/MaterialsReturnApprove', 'استلام واسترجاع الأدوات')
       pushUnique(res, '/app/meeting-minutes', 'المحاضر')
       pushUnique(res, '/app/meeting-tasks', 'متابعة التاسكات')
       pushUnique(res, '/app/camp-installments', 'التقسيط')
       pushUnique(res, '/app/camp-program', 'نظام المعسكر')
       pushUnique(res, '/app/ChefsEvaluationOverview', 'التقييم النهائى ')
+
+      // Super Admin should see the complete operational navigation as well,
+      // not only the administration shortcuts.
+      pushUnique(res, '/app/LegionEvaluations', 'تقييم فريقي')
+      pushUnique(res, '/app/TeamCases', 'ملاحظات الفريق')
+      pushUnique(res, '/app/TeamStatistics', 'إحصائيات الفريق')
+      pushUnique(res, '/app/LegionAttendance', 'غياب فريقي')
+      pushUnique(res, '/app/FieldReservationsTeam', 'حجز الارض')
+      pushUnique(res, '/app/TeamFinance', 'ميزانية الفريق')
+      pushUnique(res, '/app/MaterialTeamReservation', 'حجز الأدوات')
+      pushUnique(res, '/app/TeamSecretary', 'سكرتارية فريقي')
+      pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي (سكرتارية)')
+      pushUnique(res, '/app/reports-center', 'مركز التقارير')
+      pushUnique(res, '/app/my-camp-collections', 'تحصيل المعسكرات')
     } else {
       if (has('chef_de_legion')) {
         pushUnique(res, '/app/LegionEvaluations', 'تقييم فريقي')
@@ -329,7 +345,7 @@ export default function SideNav({ onNavigate }: Props) {
       const showMaterialsApprove = isGlobalMaterials || hasMaterialChefSameTeam
 
       if (showMaterialsApprove) {
-        pushUnique(res, '/app/MaterialsReturnApprove', 'تسليم العهده')
+        pushUnique(res, '/app/MaterialsReturnApprove', 'استلام واسترجاع الأدوات')
       }
       if (hasMaterialChefSameTeam) {
         pushUnique(res, '/app/AdminFieldReservations', 'ادارة الارض')
@@ -343,6 +359,7 @@ export default function SideNav({ onNavigate }: Props) {
         pushUnique(res, '/app/TeamSecretary', 'سكرتارية فريقي')
         pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي')
       } else if (hasTeamSecretary) {
+        pushUnique(res, '/app/AdminSecretary', 'متابعة سكرتارية الفريق')
         pushUnique(res, '/app/TeamSecretary', 'سكرتارية فريقي')
         pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي')
         pushUnique(res, '/app/TeamCases', 'ملاحظات الفريق')
@@ -425,8 +442,6 @@ export default function SideNav({ onNavigate }: Props) {
         return <svg {...common}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
       case 'gallery':
         return <svg {...common}><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-4.5-4.5L5 22"/></svg>
-      case 'knowledge':
-        return <svg {...common}><path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.18 3.6 2.15 4.55.55.54.85 1.28.85 2.05V17h6v-1.4c0-.77.3-1.51.85-2.05A6.1 6.1 0 0 0 18 9a6 6 0 0 0-6-6Z"/><path d="M9 21h6"/><path d="M10 17v2h4v-2"/><path d="M9.5 9.5h.01"/><path d="M14.5 9.5h.01"/><path d="M10 12.5c1.2.8 2.8.8 4 0"/></svg>
       case 'curriculum':
         return <svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5Z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg>
       case 'events':
@@ -451,7 +466,6 @@ export default function SideNav({ onNavigate }: Props) {
     if (label.includes('ملفي')) return <IconSvg name="profile" />
     if (label.includes('الأعضاء') || label.includes('الأدوار')) return <IconSvg name="members" />
     if (label.includes('أفضل')) return <IconSvg name="award" />
-    if (label.includes('بنك المعرفة')) return <IconSvg name="knowledge" />
     if (label.includes('الحضور') || label.includes('غياب')) return <IconSvg name="attendance" />
     if (label.includes('الميزانية') || normalized.includes('finance')) return <IconSvg name="finance" />
     if (label.includes('الأدوات') || label.includes('العهدة') || normalized.includes('material')) return <IconSvg name="materials" />
