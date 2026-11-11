@@ -1,0 +1,23 @@
+/* Release 138 — material catalogue photos, with existing glyphs as fallback */
+.materials124-tool-icon { position:relative; overflow:hidden; }
+.materials124-tool-icon img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:1; }
+.materials124-detail-photo { margin: 0 1rem; border:1px solid rgba(15,26,54,.09); border-radius:18px; overflow:hidden; background:#f5f7fa; }
+.materials124-detail-photo img { display:block; width:100%; max-height:230px; object-fit:contain; }
+.materials124-image-editor { display:flex; align-items:center; gap:1rem; padding:.85rem; border:1px dashed rgba(23,36,177,.22); border-radius:17px; background:#f8faff; }
+.materials124-image-preview { width:120px; height:112px; flex:none; display:grid; place-items:center; border-radius:16px; overflow:hidden; background:#fff; color:#2455d2; border:1px solid rgba(23,36,177,.12); }
+.materials124-image-preview img { width:100%; height:100%; object-fit:cover; }
+.materials124-image-preview svg { width:55px; height:55px; fill:none; stroke:currentColor; stroke-width:2; }
+.materials124-image-controls { min-width:0; display:flex; flex:1; flex-wrap:wrap; align-items:center; gap:.4rem .7rem; }
+.materials124-image-controls strong { width:100%; color:#0f1a36; }
+.materials124-image-controls small { width:100%; color:#64748b; font-size:.72rem; }
+.materials124-image-controls input[type=file] { flex:1; min-width:175px; max-width:100%; font-size:.75rem; }
+.materials124-image-controls .materials124-secondary { min-height:34px; padding:.4rem .7rem; font-size:.75rem; }
+.materials119-tool-visual { position:relative; overflow:hidden; }
+.materials119-tool-photo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:inherit; z-index:1; }
+.materials119-booking-photo { width:68px; height:68px; border-radius:16px; object-fit:cover; border:1px solid rgba(15,26,54,.12); }
+.materials119-reservation-glyph img { width:100%; height:100%; object-fit:cover; border-radius:inherit; }
+@media (max-width:640px) {
+  .materials124-image-editor { flex-direction:column; align-items:stretch; }
+  .materials124-image-preview { width:100%; height:150px; }
+  .materials119-booking-photo { width:52px; height:52px; }
+}
