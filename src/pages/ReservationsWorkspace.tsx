@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useScoutYear } from '../components/ScoutYearProvider'
-import { getScoutYearBounds } from '../lib/scoutYearScope'
+import { getScoutYearBounds, getTermYearBounds } from '../lib/scoutYearScope'
 import { useAuth } from '../components/AuthProvider'
 import { useToast } from '../components/ui/Toaster'
 import { PageLoader } from '../components/ui/PageLoader'
@@ -13,6 +13,10 @@ import {
   bookingDateLabel, bookingStatus, cairoDatetimeLocal, cairoLocalToISO, cairoDay,
   validateBookingEdit, type BookingRecord, type BookingKind,
 } from '../features/reservations/bookingRecords'
+import {
+  scopedReservationTerms, scopedReservationMeetings, preferredReservationMeeting,
+  reservationSelectionBounds, type ReservationTerm, type ReservationMeeting,
+} from '../features/reservations/bookingPeriod'
 import './reservations-workspace.css'
 
 type Mode = 'overview' | 'manage'
@@ -23,8 +27,6 @@ function toDraft(item: BookingRecord): Draft {
   return { teamId: item.teamId, resourceId: item.resourceId,
     startsAt: cairoDatetimeLocal(item.startsAt), endsAt: cairoDatetimeLocal(item.endsAt), qty: item.qty ?? 1 }
 }
-
-function periodLabel(start: string, end: string) { return start === end ? start : `${start} ← ${end}` }
 
 function shortYearLabel(year: { name?: string | null; start_date?: string | null; end_date?: string | null } | null) {
   return year?.name || `${year?.start_date?.slice(0, 4) || '—'}/${year?.end_date?.slice(0, 4) || '—'}`
@@ -43,8 +45,12 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
   const year = getScoutYearBounds(currentScoutYear)
   const yearStart = year?.start || ''
   const yearEnd = year?.end || ''
-  const [fromDate, setFromDate] = useState(yearStart)
-  const [toDate, setToDate] = useState(yearEnd)
+  const [terms, setTerms] = useState<ReservationTerm[]>([])
+  const [termId, setTermId] = useState('')
+  const [meetingDates, setMeetingDates] = useState<ReservationMeeting[]>([])
+  const [meetingDate, setMeetingDate] = useState('all')
+  const [termsLoading, setTermsLoading] = useState(true)
+  const [meetingsLoading, setMeetingsLoading] = useState(false)
   const [teamId, setTeamId] = useState('')
   const [kindFilter, setKindFilter] = useState<'all' | BookingKind>('all')
   const [search, setSearch] = useState('')
@@ -60,8 +66,10 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
 
   useEffect(() => {
     setData(EMPTY)
-    setFromDate(yearStart)
-    setToDate(yearEnd)
+    setTerms([])
+    setTermId('')
+    setMeetingDates([])
+    setMeetingDate('all')
     setTeamId('')
     setKindFilter('all')
     setSearch('')
@@ -70,19 +78,95 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
     setDraft(null)
   }, [currentScoutYear?.id, yearStart, yearEnd])
 
+  // Terms are fetched strictly from the year chosen in the global Scout Year selector.
+  // Never fall back to another year's term if this year has none.
+  useEffect(() => {
+    let active = true
+    setTermsLoading(true)
+    setTerms([])
+    setTermId('')
+    if (!currentScoutYear?.id || !yearStart || !yearEnd) {
+      setTermsLoading(false)
+      return () => { active = false }
+    }
+    void (async () => {
+      try {
+        const { data: rows, error } = await supabase.from('terms')
+          .select('id,name,scout_year_id,start_date,end_date')
+          .eq('scout_year_id', currentScoutYear.id)
+          .order('start_date', { ascending: true })
+        if (error) throw error
+        if (!active) return
+        const available = scopedReservationTerms((rows || []) as ReservationTerm[], currentScoutYear)
+        const today = cairoDay()
+        const selected = available.find((term) => {
+          const bounds = getTermYearBounds(currentScoutYear, term)
+          return bounds && today >= bounds.start && today <= bounds.end
+        }) || available[0]
+        setTerms(available)
+        setTermId(selected?.id || '')
+      } catch (error: any) {
+        if (active) toast.error(error?.message || 'تعذر تحميل ترمات السنة الكشفية')
+      } finally {
+        if (active) setTermsLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [currentScoutYear?.id, yearStart, yearEnd])
+
+  const selectedTerm = terms.find((term) => term.id === termId) || null
+  const termBounds = selectedTerm ? getTermYearBounds(currentScoutYear, selectedTerm) : null
+  const termStart = termBounds?.start || ''
+  const termEnd = termBounds?.end || ''
+
+  useEffect(() => {
+    let active = true
+    setMeetingDates([])
+    setMeetingDate('all')
+    setMeetingsLoading(Boolean(termId && termStart && termEnd))
+    if (!termId || !termStart || !termEnd) return () => { active = false }
+    void (async () => {
+      try {
+        const { data: rows, error } = await supabase.from('term_meeting_dates')
+          .select('id,meeting_date').eq('term_id', termId)
+          .gte('meeting_date', termStart).lte('meeting_date', termEnd)
+          .order('meeting_date', { ascending: true })
+        if (error) throw error
+        if (!active) return
+        const options = scopedReservationMeetings((rows || []) as ReservationMeeting[], { start: termStart, end: termEnd })
+        setMeetingDates(options)
+        setMeetingDate(preferredReservationMeeting(options, cairoDay()))
+      } catch (error: any) {
+        if (active) toast.error(error?.message || 'تعذر تحميل الاجتماعات المسجلة للترم')
+      } finally {
+        if (active) setMeetingsLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [termId, termStart, termEnd])
+
+  const selectedBounds = currentScoutYear?.id
+    ? reservationSelectionBounds(currentScoutYear, selectedTerm, meetingDate, meetingDates)
+    : null
+  const selectedStart = selectedBounds?.start || ''
+  const selectedEnd = selectedBounds?.end || ''
+  const selectionLabel = selectedTerm
+    ? `${selectedTerm.name} · ${meetingDate === 'all' ? 'الترم بالكامل' : meetingDate}`
+    : 'لم يتم اختيار ترم'
+
   const fetchRows = useCallback(() => setReload((count) => count + 1), [])
 
   useEffect(() => {
     const request = ++requestIndex.current
-    if (!yearStart || !yearEnd || fromDate < yearStart || toDate > yearEnd || fromDate > toDate) {
+    if (termsLoading || meetingsLoading || !selectedStart || !selectedEnd) {
       setData(EMPTY)
       setBusy(false)
       return
     }
     setBusy(true)
-    // Fetching a fresh snapshot after date/year change avoids mixed-year results.
+    // Re-fetch by the actual selected term/meeting; stale results cannot cross years.
     setData(EMPTY)
-    loadBookingSnapshot(fromDate, toDate).then((snapshot) => {
+    loadBookingSnapshot(selectedStart, selectedEnd).then((snapshot) => {
       if (request === requestIndex.current) setData(snapshot)
     }).catch((error: any) => {
       if (request === requestIndex.current) toast.error(error?.message || 'تعذر تحميل الحجوزات')
@@ -90,7 +174,7 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
       if (request === requestIndex.current) setBusy(false)
     })
     return () => { requestIndex.current += 1 }
-  }, [currentScoutYear?.id, yearStart, yearEnd, fromDate, toDate, reload])
+  }, [currentScoutYear?.id, selectedStart, selectedEnd, termsLoading, meetingsLoading, reload])
 
   const teamNames = useMemo(() => new Map(data.teams.map((team) => [team.id, team.name])), [data.teams])
   const materials = useMemo(() => new Map(data.materials.map((item) => [item.id, item.name])), [data.materials])
@@ -116,7 +200,7 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
   const countFields = filtered.filter((item) => item.kind === 'field').length
   const countCompleted = filtered.filter((item) => ['returned', 'completed'].includes(bookingStatus(item).id)).length
 
-  useEffect(() => { setPage(1) }, [teamId, kindFilter, search, fromDate, toDate])
+  useEffect(() => { setPage(1) }, [teamId, kindFilter, search, termId, meetingDate])
   const editRow = data.rows.find((item) => `${item.kind}:${item.id}` === editId) || null
 
   useEffect(() => {
@@ -236,7 +320,7 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
       </header>
 
       <div className="r135-stats" aria-label="ملخص الفترة">
-        <div><span>إجمالي الحجوزات</span><strong>{filtered.length}</strong><small>في الفترة المختارة</small></div>
+        <div><span>إجمالي الحجوزات</span><strong>{filtered.length}</strong><small>في الاجتماع أو الترم المختار</small></div>
         <div><span>حجوزات الأدوات</span><strong>{countMaterials}</strong><small>🧰 الأدوات</small></div>
         <div><span>حجوزات الأرض</span><strong>{countFields}</strong><small>🏕️ القطاعات</small></div>
         <div><span>مكتملة</span><strong>{countCompleted}</strong><small>الأرض المنتهية أو الأدوات المسترجعة</small></div>
@@ -244,25 +328,41 @@ export default function ReservationsWorkspace({ mode }: { mode: Mode }) {
 
       <section className="r135-panel r135-filters" aria-label="فلاتر الحجوزات">
         <div className="r135-panel-title">
-          <div><h2>البحث في الحجوزات</h2><p>اختر المدة والفريق لعرض الحجوزات المرتبطة بهما.</p></div>
+          <div><h2>البحث في الحجوزات</h2><p>اختر الترم ثم الاجتماع من المواعيد المسجلة في السنة الكشفية، ويمكنك تحديد الفريق.</p></div>
           <button type="button" onClick={fetchRows} disabled={busy}>↻ تحديث</button>
         </div>
         <div className="r135-filter-grid">
-          <label>من تاريخ<input type="date" min={yearStart} max={toDate || yearEnd} value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></label>
-          <label>إلى تاريخ<input type="date" min={fromDate || yearStart} max={yearEnd} value={toDate} onChange={(e) => setToDate(e.target.value)} /></label>
+          <label>الترم
+            <select value={termId} disabled={termsLoading || !terms.length} onChange={(e) => setTermId(e.target.value)}>
+              {!terms.length && <option value="">لا توجد ترمات لهذه السنة</option>}
+              {terms.map((term) => <option key={term.id} value={term.id}>{term.name}</option>)}
+            </select>
+          </label>
+          <label>الاجتماع المسجّل
+            <select value={meetingDate} disabled={meetingsLoading || !termId} onChange={(e) => setMeetingDate(e.target.value)}>
+              <option value="all">كل حجوزات الترم</option>
+              {meetingDates.map((item) => <option key={item.id} value={item.meeting_date}>{item.meeting_date}</option>)}
+            </select>
+          </label>
           <label>الفريق<select value={teamId} onChange={(e) => setTeamId(e.target.value)}><option value="">كل الفرق</option>{data.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
           {manage && <label>نوع الحجز<select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as any)}><option value="all">أدوات وأرض</option><option value="material">الأدوات فقط</option><option value="field">الأرض فقط</option></select></label>}
           {manage && <label>بحث بالاسم<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="الأداة، القطاع، الفريق..." /></label>}
         </div>
-        <div className="r135-filter-shortcuts"><button type="button" onClick={() => {setFromDate(yearStart);setToDate(yearEnd)}}>السنة كلها</button><button type="button" onClick={() => {const today = cairoDay(); const scoped = today < yearStart ? yearStart : today > yearEnd ? yearEnd : today; setFromDate(scoped);setToDate(scoped)}}>اليوم</button><small>{periodLabel(fromDate, toDate)}</small></div>
+        <div className="r135-filter-shortcuts">
+          <button type="button" disabled={!termId} onClick={() => setMeetingDate('all')}>كل الترم</button>
+          <button type="button" disabled={!meetingDates.length} onClick={() => setMeetingDate(preferredReservationMeeting(meetingDates, cairoDay()))}>أقرب اجتماع</button>
+          <small>{selectionLabel}</small>
+        </div>
+        {!termsLoading && !terms.length && <p className="r135-scope-help">لا توجد ترمات مسجلة للسنة الكشفية المختارة، ولن يتم عرض بيانات سنة أخرى.</p>}
+        {!meetingsLoading && termId && !meetingDates.length && <p className="r135-scope-help">لا توجد اجتماعات مسجلة لهذا الترم. يمكنك عرض حجوزات الترم بالكامل لحين تسجيل الاجتماعات.</p>}
       </section>
 
       {!data.approvalsAvailable && <div className="r135-warning">تعذّر قراءة سجلات اعتماد الاسترجاع؛ قد لا تعكس حالات استرجاع الأدوات الوضع الفعلي.</div>}
       {isReadOnlyView && manage && <div className="r135-warning">السنة المختارة مؤرشفة: متاح استعراض الحجوزات فقط، ولا يمكن تعديلها أو إلغاؤها هنا.</div>}
 
       <section className="r135-panel r135-records">
-        <div className="r135-panel-title"><div><h2>{manage ? 'الحجوزات القابلة للإدارة' : 'قائمة الحجوزات'}</h2><p>{filtered.length} حجز · {periodLabel(fromDate, toDate)}</p></div>{busy && <span className="r135-loading">جاري التحديث…</span>}</div>
-        {!filtered.length ? <EmptyState title="لا توجد حجوزات مطابقة" description="جرّب اختيار فترة أخرى أو فريق آخر ضمن السنة الكشفية المختارة." /> : (
+        <div className="r135-panel-title"><div><h2>{manage ? 'الحجوزات القابلة للإدارة' : 'قائمة الحجوزات'}</h2><p>{filtered.length} حجز · {selectionLabel}</p></div>{busy && <span className="r135-loading">جاري التحديث…</span>}</div>
+        {!filtered.length ? <EmptyState title="لا توجد حجوزات مطابقة" description="جرّب اختيار اجتماع آخر أو فريق آخر ضمن الترم والسنة الكشفية المختارين." /> : (
           <div className="r135-table-scroll"><table className="r135-table"><thead><tr>
             <th>النوع</th><th>الحجز</th><th>الفريق</th><th>بداية الحجز</th><th>تاريخ الانتهاء / الاكتمال</th><th>الكمية</th><th>الحالة</th>{manage && <th>إدارة</th>}
           </tr></thead><tbody>

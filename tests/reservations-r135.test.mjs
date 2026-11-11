@@ -47,11 +47,12 @@ test('Both material and land bookings loaded with identical year/date boundaries
   assert.match(api, /material_return_approvals/)
 })
 
-test('View contains team + date filters but write controls are manager-only',()=>{
+test('View contains team + term/meeting selectors but write controls are manager-only',()=>{
   const workspace=read('src/pages/ReservationsWorkspace.tsx')
   assert.match(workspace, /<label>الفريق<select/)
-  assert.match(workspace, /<label>من تاريخ<input/)
-  assert.match(workspace, /<label>إلى تاريخ<input/)
+  assert.match(workspace, /<label>الترم/)
+  assert.match(workspace, /<label>الاجتماع المسجّل/)
+  assert.doesNotMatch(workspace, /<label>من تاريخ<input|<label>إلى تاريخ<input/)
   assert.match(workspace, /\{manage && <label>نوع الحجز/)
   assert.match(workspace, /\{manage \? \(/)
   assert.match(workspace, /isReadOnlyView \|\| changing/)
