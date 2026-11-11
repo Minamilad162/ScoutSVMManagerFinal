@@ -8,7 +8,7 @@ import { InlineAlert } from '../components/ui/InlineAlert'
 import { EmptyState } from '../components/ui/EmptyState'
 import scoutBackpack from '../assets/scout-theme/scout-backpack.webp'
 import '../features/materialImages/materialImages.css'
-import { loadMaterialImageCatalog, materialPhotoUrl, removeMaterialPhoto, saveMaterialPhoto } from '../features/materialImages/api'
+import { deleteMaterialPhoto, loadMaterialImageCatalog, materialPhotoUploadError, materialPhotoUrl, uploadMaterialPhoto } from '../features/materialImages/api'
 import { validateMaterialImage } from '../features/materialImages/rules'
 
 type Material = {
@@ -182,41 +182,45 @@ export default function MaterialsAdmin() {
     if ((mImage || removeImage) && !imagesEnabled) return toast.error('ميزة صور الأدوات تحتاج تنفيذ Migration 26 على Supabase أولًا')
 
     setSavingM(true)
+    let uploadedPath: string | null = null
     try {
-      let materialId = editId
+      // Generate the id in advance for new materials, so Storage can upload before
+      // any material record is changed. This avoids a "saved details, failed image" state.
+      const materialId = editId || crypto.randomUUID()
       const previousPath = materials.find((item) => item.id === editId)?.image_path || null
+      if (mImage) {
+        try { uploadedPath = await uploadMaterialPhoto(materialId, mImage) }
+        catch (error: unknown) {
+          toast.error(materialPhotoUploadError(error))
+          return // Keep the selected image, draft fields and existing material unchanged.
+        }
+      }
+
+      const values: Record<string, unknown> = {
+        name: mName.trim(), total_qty: qty, storage_location_id: mStor || null, description: mDesc || null,
+      }
+      if (uploadedPath) values.image_path = uploadedPath
+      else if (removeImage) values.image_path = null
+
       if (editId) {
-        const { error } = await supabase.from('materials')
-          .update({ name: mName.trim(), total_qty: qty, storage_location_id: mStor || null, description: mDesc || null })
-          .eq('id', editId)
+        const { data, error } = await supabase.from('materials')
+          .update(values).eq('id', editId).select('id').single()
         if (error) throw error
+        if (!data?.id) throw new Error('لم يتم تحديث سجل الأداة؛ تحقق من الصلاحيات')
       } else {
-        const { data: created, error } = await supabase.from('materials')
-          .insert({ name: mName.trim(), total_qty: qty, storage_location_id: mStor || null, description: mDesc || null })
-          .select('id').single()
+        const { error } = await supabase.from('materials')
+          .insert({ ...values, id: materialId })
         if (error) throw error
-        materialId = created.id
       }
-      if (materialId && mImage) {
-        try { await saveMaterialPhoto(materialId, mImage, previousPath) }
-        catch (error: any) {
-          toast.error(`تم حفظ بيانات الأداة لكن فشل رفع الصورة: ${error?.message || 'خطأ في التخزين'}`)
-          await init()
-          return
-        }
-      } else if (materialId && removeImage) {
-        try { await removeMaterialPhoto(materialId, previousPath) }
-        catch (error: any) {
-          toast.error(`تم حفظ بيانات الأداة لكن تعذر إزالة الصورة: ${error?.message || ''}`)
-          await init()
-          return
-        }
-      }
-      toast.success(editId ? 'تم تحديث الأداة وصورتها' : 'تم إضافة الأداة')
+
+      // Only clean up the previous photo AFTER the DB points to the new one.
+      if ((uploadedPath || removeImage) && previousPath) await deleteMaterialPhoto(previousPath)
+      toast.success(editId ? 'تم حفظ تعديل الأداة وصورتها' : 'تم إضافة الأداة وصورتها')
       resetMaterialForm()
       await init()
-    } catch (e: any) {
-      toast.error(e.message || 'تعذر الحفظ')
+    } catch (error: any) {
+      if (uploadedPath) await deleteMaterialPhoto(uploadedPath)
+      toast.error(error?.message || 'تعذر الحفظ؛ لم يتم اعتماد التعديل')
     } finally {
       setSavingM(false)
     }
