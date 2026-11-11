@@ -11,8 +11,8 @@ const migration = read('supabase/26_material_images.sql')
 test('inventory editor accepts only bounded safe image types and can remove pictures', () => {
   assert.match(admin, /validateMaterialImage/)
   assert.match(admin, /accept="image\/jpeg,image\/png,image\/webp"/)
-  assert.match(admin, /removeMaterialPhoto\(materialId, previousPath\)/)
-  assert.match(admin, /saveMaterialPhoto\(materialId, mImage, previousPath\)/)
+  assert.match(admin, /deleteMaterialPhoto\(previousPath\)/)
+  assert.match(admin, /uploadMaterialPhoto\(materialId, mImage\)/)
 })
 
 test('booking cards render catalog photo and preserve fallback glyph', () => {
@@ -41,4 +41,24 @@ test('image types and 3 MB limit are enforced before upload', async () => {
   assert.equal(validateMaterialImage({ type: 'image/png', size: 3145729 })?.includes('3'), true)
   assert.equal(validateMaterialImage({ type: 'image/webp', size: 1024 }), null)
   assert.equal(materialImagePath('729e7d24-4270-4ab1-9328-7f0175a05e4b', 'image/png', '679978ed-b102-4415-8c40-873f0c26b078'), '729e7d24-4270-4ab1-9328-7f0175a05e4b/679978ed-b102-4415-8c40-873f0c26b078.png')
+})
+
+test('storage upload happens BEFORE the single material write (no partial metadata save)', () => {
+  const segment = admin.slice(admin.indexOf('async function saveMaterial()'), admin.indexOf('async function toggleMaterialActive('))
+  assert.ok(segment.indexOf('await uploadMaterialPhoto(') < segment.indexOf("supabase.from('materials')"))
+  assert.match(segment, /values\.image_path = uploadedPath/)
+  assert.match(segment, /\.update\(values\)\.eq\('id', editId\)/)
+  assert.match(segment, /\.insert\(\{ \.\.\.values, id: materialId \}\)/)
+  assert.match(segment, /if \(uploadedPath\) await deleteMaterialPhoto\(uploadedPath\)/)
+  assert.doesNotMatch(segment, /تم حفظ بيانات الأداة لكن فشل رفع الصورة/)
+})
+
+test('RLS follow-up migration keeps uploads role-gated and supports pre-insert image upload', () => {
+  const rls = read('supabase/27_material_images_upload_rls_fix.sql')
+  assert.match(rls, /FOR INSERT TO authenticated/i)
+  assert.match(rls, /bucket_id = 'material-images'/)
+  assert.match(rls, /public\.has_role\('admin'\)/)
+  assert.match(rls, /public\.has_role\('responsable_materials'\)/)
+  assert.doesNotMatch(rls, /exists\s*\(\s*select\s+1\s+from\s+public\.materials/i)
+  assert.match(rls, /name ~\*/)
 })
