@@ -32,6 +32,6 @@ export function getErrorMessage(error: unknown, fallback = 'حدث خطأ غير
   return fallback
 }
 
-export function logError(scope: string, error: ErrorLike, extra?: Record<string, unknown>) {
+export function logError(scope: string, error: unknown, extra?: Record<string, unknown>) {
   console.error(`[${scope}]`, error, extra || {})
 }
