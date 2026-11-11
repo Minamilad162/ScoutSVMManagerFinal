@@ -52,3 +52,6 @@
 .r135-footnote{font-size:11px;color:#71849b;margin:0 4px}
 @media(max-width:1100px){.r135-page.is-manage .r135-filter-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.r135-hero{padding:22px}}
 @media(max-width:740px){.r135-page{padding:12px 9px 32px;gap:12px}.r135-hero{padding:18px;flex-direction:column;align-items:stretch;gap:15px;border-radius:17px}.r135-hero-actions{justify-content:flex-start;min-width:0}.r135-readonly-mark{width:fit-content}.r135-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.r135-stats>div{padding:13px;border-radius:13px}.r135-stats strong{font-size:22px}.r135-panel{padding:15px 12px;border-radius:15px}.r135-filter-grid,.r135-page.is-manage .r135-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.r135-filter-grid>label:last-child:nth-child(odd){grid-column:span 2}.r135-panel-title h2{font-size:15px}.r135-filter-shortcuts small{display:none}}
+/* Release 136: term -> registered meeting selectors, no manual from/to date filter. */
+.r135-scope-help{font-size:12px;font-weight:650;color:#607a92;margin:12px 0 0}
+.r135-filter-shortcuts button:disabled{opacity:.45;cursor:not-allowed}
