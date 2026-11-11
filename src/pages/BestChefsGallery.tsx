@@ -35,23 +35,30 @@ export default function BestChefsGallery() {
   const [sections, setSections] = useState<BestChefGallerySection[]>([])
 
   useEffect(() => {
-    void load()
-  }, [currentScoutYear?.id])
-
-  async function load() {
-    setLoading(true)
+    const yearId = currentScoutYear?.id ?? null
+    let cancelled = false
+    setSections([])
     setError(null)
-    try {
-      const rows = await fetchBestChefsGallery()
-      setSections(rows)
-    } catch (err) {
-      logError('BestChefsGallery.load', err as any)
-      setError(getErrorMessage(err, 'تعذر تحميل أفضل الـ chefs'))
-      setSections([])
-    } finally {
+    if (!yearId) {
       setLoading(false)
+      return
     }
-  }
+    setLoading(true)
+    void fetchBestChefsGallery(yearId)
+      .then((rows) => {
+        if (!cancelled) setSections(rows)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        logError('BestChefsGallery.load', err as any)
+        setError(getErrorMessage(err, 'تعذر تحميل أفضل الـ chefs'))
+        setSections([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [currentScoutYear?.id])
 
   const today = toDateOnly(new Date())
   const highlightedTermId = useMemo(() => {
@@ -61,8 +68,8 @@ export default function BestChefsGallery() {
       return start && end && today >= start && today <= end
     })
     if (active) return active.term.id
-    const firstWithItems = sections.find((section) => section.items.length)
-    return firstWithItems?.term.id ?? sections[0]?.term.id ?? null
+    // A past or future term must never be presented as the current term.
+    return null
   }, [sections, today])
 
   const totalSelected = sections.reduce((sum, section) => sum + section.items.length, 0)

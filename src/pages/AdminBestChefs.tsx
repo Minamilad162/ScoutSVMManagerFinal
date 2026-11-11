@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
 import { EmptyState } from '../components/ui/EmptyState'
@@ -22,6 +22,7 @@ import {
   type BestChefSelection,
 } from '../features/bestChefs/api'
 import type { TermOption } from '../features/reference/api'
+import { filterTermsForScoutYear } from '../features/bestChefs/yearScope'
 
 function resolveAvatarUrl(raw?: string | null) {
   if (!raw) return null
@@ -39,7 +40,7 @@ function initials(name?: string | null) {
 
 export default function AdminBestChefs() {
   const { roles, user } = useAuth()
-  const { currentScoutYear } = useScoutYear()
+  const { currentScoutYear, isReadOnlyView } = useScoutYear()
   const toast = useToast()
   const isAdmin = roles.some((role) => role.role_slug === 'admin')
 
@@ -55,6 +56,8 @@ export default function AdminBestChefs() {
   const [selectedTeamId, setSelectedTeamId] = useState('')
   const [homeTermId, setHomeTermId] = useState<string | null>(null)
   const [settingHome, setSettingHome] = useState(false)
+  const loadVersion = useRef(0)
+  const selectionVersion = useRef(0)
 
   const selectedTerm = useMemo(() => terms.find((term) => term.id === selectedTermId) || null, [terms, selectedTermId])
 
@@ -64,48 +67,75 @@ export default function AdminBestChefs() {
       return
     }
     void load()
+    return () => { loadVersion.current += 1; selectionVersion.current += 1 }
   }, [isAdmin, currentScoutYear?.id])
 
   useEffect(() => {
-    if (!selectedTermId) return
-    void loadSelections(selectedTermId)
-  }, [selectedTermId])
+    if (!selectedTermId || !currentScoutYear?.id) {
+      selectionVersion.current += 1
+      setSavedItems([])
+      setSelectedIds([])
+      return
+    }
+    void loadSelections(selectedTermId, currentScoutYear.id)
+    return () => { selectionVersion.current += 1 }
+  }, [selectedTermId, currentScoutYear?.id])
 
   async function load() {
+    const requestVersion = ++loadVersion.current
     setLoading(true)
+    setTerms([])
+    setCandidates([])
+    setHomeTermId(null)
+    setSavedItems([])
+    setSelectedIds([])
     setError(null)
+    if (!currentScoutYear?.id) {
+      setSelectedTermId('')
+      setLoading(false)
+      return
+    }
     try {
       const [termRows, candidateRows, currentHomeTermId] = await Promise.all([
         listBestChefTermsForCurrentYear(),
         listBestChefCandidatesForCurrentYear(),
-        getBestChefsHomeTermId(),
+        currentScoutYear?.id ? getBestChefsHomeTermId(currentScoutYear.id) : Promise.resolve(null),
       ])
-      setTerms(termRows)
+      if (requestVersion !== loadVersion.current) return
+      const yearTerms = filterTermsForScoutYear(termRows, currentScoutYear?.id ?? '')
+      setTerms(yearTerms)
       setCandidates(candidateRows)
       setHomeTermId(currentHomeTermId)
-      if (termRows.length) {
-        setSelectedTermId((prev) => (prev && termRows.some((term) => term.id === prev) ? prev : termRows[0].id))
-      }
+      const nextTermId = selectedTermId && yearTerms.some((term) => term.id === selectedTermId)
+        ? selectedTermId : yearTerms[0]?.id ?? ''
+      setSelectedTermId(nextTermId)
+      if (nextTermId) void loadSelections(nextTermId, currentScoutYear.id)
+      else { setSavedItems([]); setSelectedIds([]) }
     } catch (err) {
+      if (requestVersion !== loadVersion.current) return
       logError('AdminBestChefs.load', err as any)
       setError(getErrorMessage(err, 'تعذر تحميل بيانات أفضل الـ chefs'))
     } finally {
-      setLoading(false)
+      if (requestVersion === loadVersion.current) setLoading(false)
     }
   }
 
-  async function loadSelections(termId: string) {
+  async function loadSelections(termId: string, yearId: string) {
+    const requestVersion = ++selectionVersion.current
     try {
-      const rows = await listBestChefsForTerm(termId)
+      const rows = await listBestChefsForTerm(termId, yearId)
+      if (requestVersion !== selectionVersion.current) return
       setSavedItems(rows)
       setSelectedIds(rows.map((item) => item.member_id))
     } catch (err) {
+      if (requestVersion !== selectionVersion.current) return
       logError('AdminBestChefs.loadSelections', err as any, { termId })
       setError(getErrorMessage(err, 'تعذر تحميل اختيارات الترم'))
     }
   }
 
   async function handleSave() {
+    if (isReadOnlyView) { toast.error('السنة المؤرشفة للعرض فقط'); return }
     if (!selectedTerm) {
       toast.error('اختر الترم أولًا')
       return
@@ -126,6 +156,7 @@ export default function AdminBestChefs() {
 
 
   async function handleSetHomeTerm() {
+    if (isReadOnlyView) { toast.error('السنة المؤرشفة للعرض فقط'); return }
     if (!selectedTerm) {
       toast.error('اختر الترم أولًا')
       return
@@ -238,7 +269,7 @@ export default function AdminBestChefs() {
               <div className="rounded-full bg-white px-3 py-1 text-sm font-bold text-amber-700 shadow-sm">
                 {terms.find((term) => term.id === homeTermId)?.name || 'لم يتم تحديد ترم للعرض حتى الآن'}
               </div>
-              <LoadingButton onClick={handleSetHomeTerm} loading={settingHome} disabled={!selectedTerm || homeTermId === selectedTerm.id}>
+              <LoadingButton onClick={handleSetHomeTerm} loading={settingHome} disabled={isReadOnlyView || !selectedTerm || homeTermId === selectedTerm.id}>
                 {homeTermId === selectedTerm?.id ? 'هذا الترم ظاهر الآن' : 'اجعل هذا الترم ظاهرًا في الرئيسية'}
               </LoadingButton>
             </div>
@@ -253,9 +284,9 @@ export default function AdminBestChefs() {
         description="يمكنك تحديد أكثر من chef، وسيظهرون في الصفحة الرئيسية للجميع داخل قسم خاص بالترم الحالي."
         actions={
           <>
-            <LoadingButton variant="outline" onClick={() => setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredCandidates.map((item) => item.member_id)])))}>تحديد المعروض</LoadingButton>
-            <LoadingButton variant="outline" onClick={() => setSelectedIds((prev) => prev.filter((id) => !filteredCandidates.some((item) => item.member_id === id)))}>إلغاء المعروض</LoadingButton>
-            <LoadingButton onClick={handleSave} loading={saving}>حفظ الاختيارات</LoadingButton>
+            <LoadingButton variant="outline" disabled={isReadOnlyView} onClick={() => setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredCandidates.map((item) => item.member_id)])))}>تحديد المعروض</LoadingButton>
+            <LoadingButton variant="outline" disabled={isReadOnlyView} onClick={() => setSelectedIds((prev) => prev.filter((id) => !filteredCandidates.some((item) => item.member_id === id)))}>إلغاء المعروض</LoadingButton>
+            <LoadingButton onClick={handleSave} loading={saving} disabled={isReadOnlyView}>حفظ الاختيارات</LoadingButton>
           </>
         }
       >
@@ -306,7 +337,8 @@ export default function AdminBestChefs() {
                     <button
                       key={item.member_id}
                       type="button"
-                      onClick={() => toggle(item.member_id)}
+                      onClick={() => { if (!isReadOnlyView) toggle(item.member_id) }}
+                      disabled={isReadOnlyView}
                       className={`rounded-[24px] border p-4 text-right shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${selected ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-white'}`}
                     >
                       <div className="flex items-start gap-3">

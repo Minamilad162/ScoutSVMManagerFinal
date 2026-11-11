@@ -10,7 +10,12 @@
     "typecheck": "tsc --noEmit",
     "qa:static": "node scripts/qa-static.mjs",
     "test": "npm run qa:static",
-    "check": "npm run qa:static && npm run typecheck && npm run build"
+    "check": "npm run qa:static && npm run typecheck && npm run build",
+    "test:scout-year": "node --experimental-strip-types --test tests/scout-year-scope.test.mjs",
+    "test:budget-year": "node --test tests/budget-scout-year-contract.test.mjs",
+    "test:secretary-forms": "node --experimental-strip-types --test tests/secretary-forms-contract.test.mjs tests/secretary-pages-tabs-contract.test.mjs",
+    "test:best-chefs-year": "node --experimental-strip-types --test tests/best-chefs-year-isolation.test.mjs",
+    "test:reservations": "node --experimental-strip-types --test tests/reservations-r135.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

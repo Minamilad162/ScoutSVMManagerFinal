@@ -370,22 +370,25 @@ export default function TeamStatistics() {
 
   /* UI */
   return (
-    <div className="space-y-6 p-4 md:p-6">
+    <div className="teamops127-page teamstatistics127-page space-y-6 p-4 md:p-6">
       <PageLoader visible={loading} text="جاري التحميل..." />
 
       <PageHero
+        className="teamops127-hero teamstatistics127-hero"
         eyebrow="إحصائيات الفريق"
         title="رؤية أوضح للحضور والالتزام داخل الفريق"
         description="استعرض الإحصائيات حسب الاجتماع أو الترم أو الفرد، مع قراءة أسرع للمؤشرات الأساسية الخاصة بالفريق الحالي."
       />
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <MetricCard label="اجتماعات الترم" value={meetings.length} accent="indigo" />
-        <MetricCard label="أفراد الفريق" value={members.length} accent="sky" />
-        <MetricCard label="الفريق الحالي" value={teamName || '—'} accent="emerald" />
+      <div className="teamops127-metrics grid grid-cols-2 gap-3 md:grid-cols-5">
+        <MetricCard label="أفراد الفريق" value={members.length} accent="indigo" />
+        <MetricCard label="اجتماعات الترم" value={meetings.length} accent="sky" />
+        <MetricCard label="متوسط الحضور" value={`${termTotals.ratio}%`} accent="emerald" />
+        <MetricCard label="سجلات الحضور" value={termTotals.total} accent="amber" />
+        <MetricCard label="الفريق الحالي" value={teamName || '—'} accent="violet" />
       </div>
 
-      <SectionCard title="نطاق العرض" description="اختر الفريق والترم ثم بدّل بين طرق العرض المختلفة حسب نوع التحليل المطلوب.">
+      <SectionCard className="teamops127-filter-panel" title="نطاق العرض" description="اختر الفريق والترم ثم بدّل بين طرق العرض المختلفة حسب نوع التحليل المطلوب.">
 
       {(isAdmin || isGlobalSec) ? (
         <div className="mb-2">

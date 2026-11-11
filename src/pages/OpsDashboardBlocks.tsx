@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { scoutYearFrom, supabase } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 import { PageLoader } from '../components/ui/PageLoader'
 import { useToast } from '../components/ui/Toaster'
 import { fetchTerms } from '../features/reference/api'
+import { getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { PageHero } from '../components/ui/PageHero'
 import { MetricCard } from '../components/ui/MetricCard'
 import { EmptyState } from '../components/ui/EmptyState'
@@ -41,8 +42,17 @@ export default function OpsDashboardBlocks() {
   // الميزانية
   const [budgets, setBudgets] = useState<BudgetRow[]>([])
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    const bounds = getScoutYearBounds(currentScoutYear)
+    if (!bounds) { setBudgets([]); setHeat([]); setMatUsage([]); return }
+    const today = new Date().toISOString().slice(0, 10)
+    const end = today >= bounds.start && today <= bounds.end ? today : bounds.end
+    setStart(bounds.start)
+    setEnd(end)
+  }, [currentScoutYear?.id])
+  useEffect(() => { if (currentScoutYear?.id && start && end) void refresh() }, [currentScoutYear?.id, start, end])
   async function refresh() {
+    if (!getScoutYearBounds(currentScoutYear)) return
     setLoading(true)
     try {
       await Promise.all([
@@ -56,6 +66,10 @@ export default function OpsDashboardBlocks() {
       toast.error(e.message || 'تعذر التحميل')
     } finally { setLoading(false) }
   }
+
+  const scopedRange = getScoutYearBounds(currentScoutYear)
+  const effectiveStart = scopedRange && start > scopedRange.start ? start : scopedRange?.start || ''
+  const effectiveEnd = scopedRange && end < scopedRange.end ? end : scopedRange?.end || ''
 
   async function loadMaterials() {
     try {
@@ -71,7 +85,7 @@ export default function OpsDashboardBlocks() {
       const { data, error } = await supabase
         .from('material_reservations')
         .select('material_id, starts_at, ends_at')
-        .gte('starts_at', start).lte('ends_at', `${end} 23:59:59`)
+        .gte('starts_at', `${effectiveStart}T00:00:00`).lte('ends_at', `${effectiveEnd}T23:59:59`)
       if (error) throw error
 
       const map = new Map<string, MatUsageRow>()
@@ -94,6 +108,8 @@ export default function OpsDashboardBlocks() {
   // ========= 2) تأخّر تسليم العهدة =========
   async function loadReturnDelays() {
     try {
+      // Live overdue snapshot is unrelated to archived years; do not mix it into historical views.
+      if (!scopedRange || !inDateBounds(new Date().toISOString().slice(0,10), scopedRange)) { setOverdueItems([]); setOverdueTeams([]); return }
       const { data: d1 } = await supabase
         .from('v_material_items_due_today')
         .select('material_name, team_name, days_overdue')
@@ -140,7 +156,7 @@ export default function OpsDashboardBlocks() {
       const { data, error } = await supabase
         .from('field_reservations')
         .select('field_zone_id, starts_at, ends_at, field_zones(name)')
-        .gte('starts_at', start).lte('ends_at', `${end} 23:59:59`)
+        .gte('starts_at', `${effectiveStart}T00:00:00`).lte('ends_at', `${effectiveEnd}T23:59:59`)
       if (error) throw error
 
       const cellMap = new Map<string, number>() // key: `${dow}-${hour}`
@@ -174,76 +190,51 @@ export default function OpsDashboardBlocks() {
     }
   }
 
-  // ========= 4) إنذارات الميزانية =========
-  async function getLatestTermId(): Promise<string | null> {
-  try {
-    let query = scoutYearFrom('v_terms_with_scout_year', 'v_terms_context')
-      .select('id, year, scout_year_id')
-      .order('year', { ascending: false })
-      .limit(1)
-    if (currentScoutYear?.id) query = query.eq('scout_year_id', currentScoutYear.id)
-    const { data, error } = await query.maybeSingle()
-    if (error) throw error
-    return (data as any)?.id ?? null
-  } catch {
-    return null
-  }
-}
+  // ========= 4) إنذارات الميزانية — year-scoped, from real expenses =========
+  async function loadBudgets() {
+    try {
+      const bounds = getScoutYearBounds(currentScoutYear)
+      const terms = await fetchTerms()
+      if (!bounds || !terms.length) { setBudgets([]); return }
 
-async function fallbackBudgetsFromTeamBudgets() {
-  try {
-    const latestTermId = await getLatestTermId()
-    // لو مفيش terms هنعرض كل الميزانيات المتاحة
-    let q = supabase.from('team_budgets')
-      .select('team_id, term_id, amount_total, teams(name)')
-      .order('team_id') as any
-    if (latestTermId) q = q.eq('term_id', latestTermId)
+      const termIds = terms.map(term => term.id)
+      const [{ data: budgetRows, error: bError }, { data: expenseRows, error: eError }] = await Promise.all([
+        supabase.from('v_team_budgets_effective')
+          .select('team_id,term_id,amount_total,teams(name)')
+          .in('term_id', termIds).is('soft_deleted_at', null),
+        supabase.from('expenses')
+          .select('team_id,term_id,total,expense_date')
+          .in('term_id', termIds).gte('expense_date', bounds.start).lte('expense_date', bounds.end)
+          .is('soft_deleted_at', null),
+      ])
+      if (bError) throw bError
+      if (eError) throw eError
 
-    const { data, error } = await q
-    if (error) throw error
+      const termMap = new Map(terms.map(term => [term.id, term]))
+      const spentByTeam = new Map<string, number>()
+      for (const expense of expenseRows || []) {
+        const term = termMap.get(expense.term_id)
+        if (!term || !inDateBounds(expense.expense_date, getTermYearBounds(currentScoutYear, term))) continue
+        spentByTeam.set(expense.team_id, (spentByTeam.get(expense.team_id) || 0) + Number(expense.total || 0))
+      }
 
-    const rows = ((data as any[]) ?? []).map(r => ({
-      team_id: String(r.team_id ?? ''),
-      team_name: r.teams?.name ?? '—',
-      budget_total: Number(r.amount_total ?? 0),
-      spent_total: 0,                // لحد ما نربطها بمصاريف فعلية
-      remaining_percent: 100         // بما إننا مش حاسبين المصروف هنا
-    }))
-
-    setBudgets(rows.sort((a,b)=> a.remaining_percent - b.remaining_percent))
-  } catch {
-    setBudgets([])
-  }
-}
-
-async function loadBudgets() {
-  // 1) جرّب الـ view لو متاح
-  try {
-    const { data, error } = await supabase
-      .from('v_finance_summary')
-      .select('team_id, team_name, remaining_percent, budget_total, spent_total')
-    if (error) throw error
-
-    const rows = ((data as any[]) ?? []).map(r => ({
-      team_id: String(r.team_id ?? ''),
-      team_name: r.team_name ?? '—',
-      remaining_percent: Number(r.remaining_percent ?? 0),
-      budget_total: r.budget_total ?? null,
-      spent_total: r.spent_total ?? null
-    }))
-
-    // لو الـ view راجع فاضي استخدم fallback
-    if (!rows.length) {
-      await fallbackBudgetsFromTeamBudgets()
-      return
+      const byTeam = new Map<string, { team_id: string; team_name: string; budget_total: number; spent_total: number; remaining_percent: number }>()
+      for (const budget of budgetRows || []) {
+        const teamId = String(budget.team_id)
+        const existing = byTeam.get(teamId)
+        const teamName = (budget.teams as any)?.name || '—'
+        if (existing) existing.budget_total += Number(budget.amount_total || 0)
+        else byTeam.set(teamId, { team_id: teamId, team_name: teamName, budget_total: Number(budget.amount_total || 0), spent_total: 0, remaining_percent: 100 })
+      }
+      const scoped = Array.from(byTeam.values()).map(row => {
+        const spent = spentByTeam.get(row.team_id) || 0
+        return { ...row, spent_total: spent, remaining_percent: row.budget_total > 0 ? 100 * (row.budget_total - spent) / row.budget_total : 0 }
+      })
+      setBudgets(scoped.sort((a, b) => a.remaining_percent - b.remaining_percent))
+    } catch {
+      setBudgets([])
     }
-
-    setBudgets(rows.sort((a,b)=> a.remaining_percent - b.remaining_percent))
-  } catch {
-    // 2) لو الـ view مش موجود/وقع: استخدم fallback من team_budgets
-    await fallbackBudgetsFromTeamBudgets()
   }
-}
 
   // ======= Derived / helpers =======
   const matName = (id: string) => materials.find(m=>m.id===id)?.name || id
@@ -271,9 +262,9 @@ async function loadBudgets() {
         <h2 className="text-lg font-bold">لوحة المتابعة — المواد / الأرض / الميزانية</h2>
         <div className="flex items-center gap-2">
           <label className="text-sm">الفترة</label>
-          <input type="date" className="border rounded-xl p-2" value={start} onChange={e=>setStart(e.target.value)} />
+          <input type="date" min={scopedRange?.start} max={scopedRange?.end} className="border rounded-xl p-2" value={start} onChange={e=>setStart(e.target.value)} />
           <span>—</span>
-          <input type="date" className="border rounded-xl p-2" value={end} onChange={e=>setEnd(e.target.value)} />
+          <input type="date" min={scopedRange?.start} max={scopedRange?.end} className="border rounded-xl p-2" value={end} onChange={e=>setEnd(e.target.value)} />
           <button className="btn border" onClick={refresh}>تحديث</button>
         </div>
       </div>

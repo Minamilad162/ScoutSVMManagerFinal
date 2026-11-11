@@ -8,6 +8,7 @@ import { MetricCard } from '../components/ui/MetricCard'
 import { PageHero } from '../components/ui/PageHero'
 import { SectionCard } from '../components/ui/SectionCard'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { clampDateToBounds, getScoutYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { safeWriteAuditLog } from '../features/audit/api'
 import { buildAttendanceSummary } from '../features/audit/humanize'
 import { fetchTerms } from '../features/reference/api'
@@ -65,7 +66,7 @@ export default function AdminAttendance() {
   const [dayStatus, setDayStatus] = useState<Record<string, DayStatus>>({})
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { init() }, [])
+  useEffect(() => { if (currentScoutYear?.id) void init() }, [currentScoutYear?.id])
   async function init() {
     setLoading(true)
     try {
@@ -80,18 +81,19 @@ export default function AdminAttendance() {
       const tmsList = await fetchTerms()
       const tms = tmsList as Term[]
       setTerms(tmsList)
-      if (tmsList.length) setReadTermId(tmsList[0].id)
+      setReadTermId(tmsList[0]?.id || '')
 
       // تواريخ افتراضية للقراءة (الشهر الحالي)
       const today = new Date(); const pad = (n:number)=>String(n).padStart(2,'0')
       const start = new Date(today.getFullYear(), today.getMonth(), 1)
-      setReadFrom(`${start.getFullYear()}-${pad(start.getMonth()+1)}-${pad(start.getDate())}`)
-      setReadTo(`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`)
-      setReadYear(today.getFullYear())
+      const yearBounds = getScoutYearBounds(currentScoutYear)
+      setReadFrom(clampDateToBounds(`${start.getFullYear()}-${pad(start.getMonth()+1)}-${pad(start.getDate())}`, yearBounds))
+      setReadTo(clampDateToBounds(`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`, yearBounds))
+      setReadYear(Number(currentScoutYear?.start_date?.slice(0, 4) || today.getFullYear()))
 
       // افتراض الكتابة: أول فريق لو موجود
       if (tlist.length) setWriteTeamId(tlist[0].id)
-      setWriteDate(`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`)
+      setWriteDate(clampDateToBounds(`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`, yearBounds))
       setWriteType('meeting')
     } catch (e:any) {
       toast.error(e.message || 'تعذر التحميل')
@@ -131,19 +133,17 @@ export default function AdminAttendance() {
 
   // ====== READ: حساب الفترة الزمنية الفعلية من الفلاتر ======
   function computeReadRange(): { from?: string, to?: string } {
+    const year = getScoutYearBounds(currentScoutYear)
+    if (!year) return { from: '9999-01-01', to: '9999-01-01' }
     if (readScope === 'range') {
-      return { from: readFrom || undefined, to: readTo || undefined }
+      return { from: readFrom && readFrom > year.start ? readFrom : year.start, to: readTo && readTo < year.end ? readTo : year.end }
     }
     if (readScope === 'year') {
-      if (currentScoutYear?.start_date && currentScoutYear?.end_date) {
-        return { from: currentScoutYear.start_date, to: currentScoutYear.end_date }
-      }
-      const y = readYear || new Date().getFullYear()
-      return { from: `${y}-01-01`, to: `${y}-12-31` }
+      return { from: year.start, to: year.end }
     }
     // term
     const t = terms.find(x => x.id === readTermId)
-    return { from: (t?.start_date || undefined), to: (t?.end_date || undefined) }
+    return { from: t?.start_date && t.start_date > year.start ? t.start_date : year.start, to: t?.end_date && t.end_date < year.end ? t.end_date : year.end }
   }
 
   // ====== READ: تحميل الإحصائيات ======
@@ -266,6 +266,7 @@ export default function AdminAttendance() {
   const [savingBusy, setSavingBusy] = useState(false)
   async function saveAttendance() {
     if (!writeDate) return toast.error('اختر التاريخ')
+    if (!inDateBounds(writeDate, getScoutYearBounds(currentScoutYear))) return toast.error('تاريخ الحضور خارج السنة الكشفية المختارة')
     if (!chefs.length) return toast.error('لا يوجد Chef de legion للحفظ')
 
     setSaving(true); setSavingBusy(true)
@@ -274,7 +275,7 @@ export default function AdminAttendance() {
       if (writeTeamId !== 'all') {
         const { data: mrow, error: me } = await supabase
           .from('meetings')
-          .upsert({ team_id: writeTeamId, meeting_date: writeDate, mtype: writeType }, { onConflict: 'team_id,meeting_date,mtype' })
+          .upsert({ team_id: writeTeamId, meeting_date: writeDate, mtype: writeType, scout_year_id: currentScoutYear?.id }, { onConflict: 'team_id,meeting_date,mtype' })
           .select('id')
           .maybeSingle()
         if (me) throw me
@@ -434,219 +435,151 @@ export default function AdminAttendance() {
   // ====== مشتقات للعرض ======
   const showTeamColumnInRead = readTeamId === 'all'
   const showTeamColumnInWrite = writeTeamId === 'all'
+  const attendanceTotals = useMemo(() => readRows.reduce((acc:any, row:any) => ({
+    present: acc.present + Number(row.present || 0),
+    excused: acc.excused + Number(row.excused || 0),
+    unexcused: acc.unexcused + Number(row.unexcused || 0),
+    total: acc.total + Number(row.total || 0),
+  }), { present: 0, excused: 0, unexcused: 0, total: 0 }), [readRows])
+  const attendancePct = attendanceTotals.total > 0
+    ? Math.round((attendanceTotals.present / attendanceTotals.total) * 100)
+    : 0
+  const markedToday = useMemo(
+    () => chefs.filter((member) => typeof dayStatus[member.id]?.present === 'boolean').length,
+    [chefs, dayStatus]
+  )
 
   // ====== UI ======
   return (
-    <div className="space-y-6 p-4 md:p-6">
+    <div className="attendance123-page space-y-5 p-4 md:p-6">
       <PageLoader visible={loading} text="جاري التحميل..." />
 
       <PageHero
-        eyebrow="إدارة الحضور"
-        title="متابعة حضور وغياب قادة المراحل والإدارة"
-        description="اعرض الإحصائيات عبر المدى أو السنة أو الترم، وسجّل حضور اليوم الحالي بشكل أوضح من نفس الشاشة."
-        badge={<span className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">Admin</span>}
+        className="attendance123-hero"
+        eyebrow="الحضور"
+        title="إدارة الحضور"
+        description="راجع التزام قادة الفرق عبر المدى أو السنة أو الترم، ثم سجّل حضور اليوم من نفس مساحة العمل بدون تغيير خطوات الحفظ الحالية."
+        badge={<span className="attendance123-hero-badge">Admin</span>}
       />
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <MetricCard label="الفرق المتاحة" value={teams.length} accent="indigo" />
-        <MetricCard label="الترمات المتاحة" value={terms.length} accent="sky" />
-        <MetricCard label="سجلات الإحصاء الحالية" value={readRows.length} accent="emerald" />
+      <div className="attendance123-kpis grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="إجمالي السجلات" value={attendanceTotals.total} hint={readRows.length ? `${readRows.length} قائد في النتائج` : 'اعرض الإحصائيات لبدء التحليل'} accent="navy" />
+        <MetricCard label="حاضر" value={attendanceTotals.present} accent="emerald" />
+        <MetricCard label="غياب بعذر" value={attendanceTotals.excused} accent="amber" />
+        <MetricCard label="غياب بدون عذر" value={attendanceTotals.unexcused} accent="rose" />
+        <MetricCard label="نسبة الحضور" value={`${attendancePct}%`} hint={attendanceTotals.total ? 'من السجلات المعروضة' : 'لا توجد بيانات بعد'} accent="sky" />
       </div>
 
-      <SectionCard title="إحصائيات الحضور (Chef de legion)" description="يمكنك التبديل بين كل الفرق أو فريق واحد، ثم اختيار النطاق الأنسب لمراجعة الالتزام.">
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 items-end">
-          <div className="min-w-0">
-            <label className="text-sm">الفريق</label>
-            <select className="border rounded-xl p-2 w-full cursor-pointer" value={readTeamId} onChange={e=>setReadTeamId(e.target.value)}>
-              <option value="all">الكل</option>
+      <SectionCard
+        className="attendance123-panel attendance123-stats"
+        title="إحصائيات الحضور — Chef de legion"
+        description="استخدم نفس الفلاتر الحالية لاختيار الفريق والنطاق، ثم اعرض النتائج في جدول موحد وسهل القراءة."
+        actions={<span className="attendance123-count-chip">{readRows.length} قائد</span>}
+      >
+        <div className="attendance123-filterbar">
+          <label className="attendance123-field">
+            <span>الفريق</span>
+            <select value={readTeamId} onChange={e=>setReadTeamId(e.target.value)}>
+              <option value="all">كل الفرق</option>
               {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-          </div>
+          </label>
 
-          <div className="min-w-0">
-            <label className="text-sm">النطاق</label>
-            <select className="border rounded-xl p-2 w-full cursor-pointer" value={readScope} onChange={e=>setReadScope(e.target.value as ScopeRead)}>
+          <label className="attendance123-field">
+            <span>النطاق</span>
+            <select value={readScope} onChange={e=>setReadScope(e.target.value as ScopeRead)}>
               <option value="range">مدى (من/إلى)</option>
               <option value="year">سنة كاملة</option>
               <option value="term">ترم</option>
             </select>
-          </div>
+          </label>
 
-          {/* مدى */}
           {readScope === 'range' && (
             <>
-              <div className="min-w-0">
-                <label className="text-sm">من</label>
-                <input type="date" className="border rounded-xl p-2 w-full" value={readFrom} onChange={e=>setReadFrom(e.target.value)} />
-              </div>
-              <div className="min-w-0">
-                <label className="text-sm">إلى</label>
-                <input type="date" className="border rounded-xl p-2 w-full" value={readTo} onChange={e=>setReadTo(e.target.value)} />
-              </div>
-              <div className="text-end sm:col-span-2 md:col-span-1">
-                <button className="btn border w-full sm:w-auto" onClick={loadStats}>عرض الإحصائيات</button>
-              </div>
+              <label className="attendance123-field"><span>من</span><input type="date" value={readFrom} min={getScoutYearBounds(currentScoutYear)?.start} max={getScoutYearBounds(currentScoutYear)?.end} onChange={e=>setReadFrom(e.target.value)} /></label>
+              <label className="attendance123-field"><span>إلى</span><input type="date" value={readTo} min={getScoutYearBounds(currentScoutYear)?.start} max={getScoutYearBounds(currentScoutYear)?.end} onChange={e=>setReadTo(e.target.value)} /></label>
             </>
           )}
 
-          {/* سنة */}
           {readScope === 'year' && (
-            <>
-              <div className="min-w-0">
-                <label className="text-sm">السنة</label>
-                <input
-                  type="number"
-                  className="border rounded-xl p-2 w-full"
-                  value={readYear}
-                  onChange={e=>setReadYear(Number(e.target.value)||new Date().getFullYear())}
-                />
-              </div>
-              <div className="md:col-span-2 text-end">
-                <button className="btn border w-full sm:w-auto" onClick={loadStats}>عرض الإحصائيات</button>
-              </div>
-            </>
+            <label className="attendance123-field"><span>السنة</span><input type="number" value={readYear} readOnly /></label>
           )}
 
-          {/* ترم */}
           {readScope === 'term' && (
-            <>
-              <div className="md:col-span-2 min-w-0">
-                <label className="text-sm">الترم</label>
-                <select className="border rounded-xl p-2 w-full cursor-pointer" value={readTermId} onChange={e=>setReadTermId(e.target.value)}>
-                  {terms.map(t => (
-                    <option key={t.id} value={t.id}>{t.year} — {t.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="text-end">
-                <button className="btn border w-full sm:w-auto" onClick={loadStats}>عرض الإحصائيات</button>
-              </div>
-            </>
+            <label className="attendance123-field attendance123-field-wide">
+              <span>الترم</span>
+              <select value={readTermId} onChange={e=>setReadTermId(e.target.value)}>
+                {terms.map(t => <option key={t.id} value={t.id}>{t.year} — {t.name}</option>)}
+              </select>
+            </label>
           )}
+
+          <button type="button" className="attendance123-primary" onClick={loadStats}>عرض الإحصائيات</button>
         </div>
 
-        <div className="border rounded-2xl overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px] md:min-w-0">
-            <thead className="bg-gray-100">
+        <div className="attendance123-table-wrap">
+          <table className="attendance123-table min-w-[900px] md:min-w-0">
+            <thead>
               <tr>
-                {showTeamColumnInRead && <th className="p-2 text-start whitespace-nowrap">الفريق</th>}
-                <th className="p-2 text-start">الاسم</th>
-                <th className="p-2 text-start whitespace-nowrap">الرتبة</th>
-                <th className="p-2 text-center whitespace-nowrap">حضور</th>
-                <th className="p-2 text-center whitespace-nowrap">غياب بعذر</th>
-                <th className="p-2 text-center whitespace-nowrap">غياب بدون عذر</th>
-                <th className="p-2 text-center whitespace-nowrap">الإجمالي</th>
-                <th className="p-2 text-center whitespace-nowrap">نسبة الحضور</th>
+                {showTeamColumnInRead && <th>الفريق</th>}
+                <th>الاسم</th><th>الرتبة</th><th>حضور</th><th>غياب بعذر</th><th>غياب بدون عذر</th><th>الإجمالي</th><th>نسبة الحضور</th>
               </tr>
             </thead>
             <tbody>
               {readRows.map((r:any, i:number) => {
                 const pct = r.total > 0 ? Math.round((r.present / r.total) * 100) : 0
                 return (
-                  <tr key={i} className="border-t align-middle">
-                    {showTeamColumnInRead && <td className="p-2 break-words">{r.team_name}</td>}
-                    <td className="p-2 break-words">{r.name}</td>
-                    <td className="p-2 break-words">{r.rank}</td>
-                    <td className="p-2 text-center whitespace-nowrap">{r.present}</td>
-                    <td className="p-2 text-center whitespace-nowrap">{r.excused}</td>
-                    <td className="p-2 text-center whitespace-nowrap">{r.unexcused}</td>
-                    <td className="p-2 text-center whitespace-nowrap">{r.total}</td>
-                    <td className="p-2 text-center whitespace-nowrap">
-                      <span className={`inline-flex items-center justify-center min-w-[56px] px-2 py-1 rounded-full text-xs ${pct>=80?'bg-emerald-50 border border-emerald-300 text-emerald-700': pct>=60?'bg-amber-50 border border-amber-300 text-amber-700':'bg-rose-50 border border-rose-300 text-rose-700'}`}>
-                        {r.total > 0 ? `${pct}%` : '—'}
-                      </span>
-                    </td>
+                  <tr key={i}>
+                    {showTeamColumnInRead && <td><span className="attendance123-team">{r.team_name}</span></td>}
+                    <td><strong>{r.name}</strong></td>
+                    <td>{r.rank}</td>
+                    <td className="text-center"><span className="attendance123-number is-present">{r.present}</span></td>
+                    <td className="text-center"><span className="attendance123-number is-excused">{r.excused}</span></td>
+                    <td className="text-center"><span className="attendance123-number is-absent">{r.unexcused}</span></td>
+                    <td className="text-center font-black">{r.total}</td>
+                    <td className="text-center"><span className={`attendance123-pct ${pct>=80?'is-good':pct>=60?'is-warn':'is-bad'}`}>{r.total > 0 ? `${pct}%` : '—'}</span></td>
                   </tr>
                 )
               })}
-              {readRows.length === 0 && (
-                <tr>
-                  <td className="p-3 text-center text-gray-500" colSpan={showTeamColumnInRead ? 8 : 7}>
-                    لا توجد بيانات
-                  </td>
-                </tr>
-              )}
+              {readRows.length === 0 && <tr><td className="attendance123-empty" colSpan={showTeamColumnInRead ? 8 : 7}>اختر النطاق واضغط «عرض الإحصائيات» لعرض البيانات.</td></tr>}
             </tbody>
           </table>
         </div>
       </SectionCard>
 
-      <SectionCard title="تسجيل حضور — (Chef de legion فقط)" description="سجّل حالة اليوم واختر ما إذا كان الغياب بعذر مع كتابة الملاحظة اللازمة عند الحاجة.">
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 items-end">
-          <div className="min-w-0">
-            <label className="text-sm">الفريق</label>
-            <select className="border rounded-xl p-2 w-full cursor-pointer" value={writeTeamId} onChange={e=>setWriteTeamId(e.target.value)}>
-              <option value="all">الكل</option>
-              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          </div>
-          <div className="min-w-0">
-            <label className="text-sm">التاريخ</label>
-            <input type="date" className="border rounded-xl p-2 w-full" value={writeDate} onChange={e=>setWriteDate(e.target.value)} />
-          </div>
-          <div className="min-w-0">
-            <label className="text-sm">نوع اليوم</label>
-            <select className="border rounded-xl p-2 w-full cursor-pointer" value={writeType} onChange={e=>setWriteType(e.target.value as any)}>
-              <option value="preparation">تحضير</option>
-              <option value="meeting">اجتماع</option>
-            </select>
-          </div>
-          <div className="md:col-span-2 text-end">
-            <LoadingButton loading={saving} onClick={saveAttendance}>حفظ الحضور</LoadingButton>
-          </div>
+      <SectionCard
+        className="attendance123-panel attendance123-write"
+        title="تسجيل حضور اليوم — Chef de legion"
+        description="نفس عملية التسجيل الحالية: اختر الفريق والتاريخ ونوع اليوم، حدّد حاضر/غائب والعذر عند الحاجة، ثم احفظ."
+        actions={<span className="attendance123-count-chip is-green">تم تحديد {markedToday} من {chefs.length}</span>}
+      >
+        <div className="attendance123-filterbar attendance123-write-filters">
+          <label className="attendance123-field"><span>الفريق</span><select value={writeTeamId} onChange={e=>setWriteTeamId(e.target.value)}><option value="all">كل الفرق</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+          <label className="attendance123-field"><span>التاريخ</span><input type="date" value={writeDate} min={getScoutYearBounds(currentScoutYear)?.start} max={getScoutYearBounds(currentScoutYear)?.end} onChange={e=>setWriteDate(e.target.value)} /></label>
+          <label className="attendance123-field"><span>نوع اليوم</span><select value={writeType} onChange={e=>setWriteType(e.target.value as any)}><option value="preparation">تحضير</option><option value="meeting">اجتماع</option></select></label>
+          <LoadingButton className="attendance123-save" loading={saving} onClick={saveAttendance}>حفظ الحضور</LoadingButton>
         </div>
 
-        <div className="border rounded-2xl overflow-x-auto">
-          <table className="w-full text-sm min-w-[860px] md:min-w-0">
-            <thead className="bg-gray-100">
-              <tr>
-                {showTeamColumnInWrite && <th className="p-2 text-start whitespace-nowrap">الفريق</th>}
-                <th className="p-2 text-start">الاسم</th>
-                <th className="p-2 text-center whitespace-nowrap">حاضر</th>
-                <th className="p-2 text-center whitespace-nowrap">غائب</th>
-                <th className="p-2 text-center whitespace-nowrap">بعذر؟</th>
-                <th className="p-2 text-start">العذر</th>
-              </tr>
-            </thead>
+        <div className="attendance123-table-wrap">
+          <table className="attendance123-table attendance123-write-table min-w-[860px] md:min-w-0">
+            <thead><tr>{showTeamColumnInWrite && <th>الفريق</th>}<th>الاسم</th><th>حاضر</th><th>غائب</th><th>بعذر؟</th><th>العذر</th></tr></thead>
             <tbody>
               {chefs.map(m => {
                 const st = dayStatus[m.id] || {}
                 const present = st.present === true
                 const absent = st.present === false
                 return (
-                  <tr key={m.id} className="border-t align-top">
-                    {showTeamColumnInWrite && <td className="p-2 break-words">{teamNameMap.get(m.team_id) || '—'}</td>}
-                    <td className="p-2 break-words">{m.full_name}</td>
-                    <td className="p-2 text-center whitespace-nowrap">
-                      <input type="radio" name={`att-${m.id}`} checked={present} onChange={()=>setPresent(m.id, true)} />
-                    </td>
-                    <td className="p-2 text-center whitespace-nowrap">
-                      <input type="radio" name={`att-${m.id}`} checked={absent} onChange={()=>setPresent(m.id, false)} />
-                    </td>
-                    <td className="p-2 text-center whitespace-nowrap">
-                      <input type="checkbox" disabled={!absent} checked={!!st.is_excused} onChange={e=>setExcused(m.id, e.target.checked)} />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        className="border rounded-xl p-2 w-full min-w-0"
-                        placeholder="سبب الغياب (اختياري)"
-                        value={st.excuse_note || ''}
-                        onChange={e=>setNote(m.id, e.target.value)}
-                        disabled={!absent}
-                      />
-                    </td>
+                  <tr key={m.id} className={present ? 'is-present-row' : absent ? 'is-absent-row' : ''}>
+                    {showTeamColumnInWrite && <td><span className="attendance123-team">{teamNameMap.get(m.team_id) || '—'}</span></td>}
+                    <td><strong>{m.full_name}</strong></td>
+                    <td className="text-center"><label className="attendance123-choice is-present"><input type="radio" name={`att-${m.id}`} checked={present} onChange={()=>setPresent(m.id, true)} /><span>حاضر</span></label></td>
+                    <td className="text-center"><label className="attendance123-choice is-absent"><input type="radio" name={`att-${m.id}`} checked={absent} onChange={()=>setPresent(m.id, false)} /><span>غائب</span></label></td>
+                    <td className="text-center"><label className="attendance123-excuse"><input type="checkbox" disabled={!absent} checked={!!st.is_excused} onChange={e=>setExcused(m.id, e.target.checked)} /><span>بعذر</span></label></td>
+                    <td><input className="attendance123-note-input" placeholder="سبب الغياب (اختياري)" value={st.excuse_note || ''} onChange={e=>setNote(m.id, e.target.value)} disabled={!absent} /></td>
                   </tr>
                 )
               })}
-              {chefs.length === 0 && (
-                <tr>
-                  <td className="p-3 text-center text-gray-500" colSpan={showTeamColumnInWrite ? 6 : 5}>
-                    لا يوجد Chef de legion مطابق
-                  </td>
-                </tr>
-              )}
+              {chefs.length === 0 && <tr><td className="attendance123-empty" colSpan={showTeamColumnInWrite ? 6 : 5}>لا يوجد Chef de legion مطابق للفريق المختار.</td></tr>}
             </tbody>
           </table>
         </div>

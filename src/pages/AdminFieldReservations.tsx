@@ -4,9 +4,14 @@ import { scoutYearFrom, supabase } from '../lib/supabase'
 import { PageLoader } from '../components/ui/PageLoader'
 import { useToast } from '../components/ui/Toaster'
 import { fetchTerms } from '../features/reference/api'
+import { useScoutYear } from '../components/ScoutYearProvider'
+import { clampDateToBounds, getTermYearBounds, getScoutYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { safeWriteAuditLog } from '../features/audit/api'
 import { buildFieldReservationSummary } from '../features/audit/humanize'
 import { LoadingButton } from '../components/ui/LoadingButton'
+import { MetricCard } from '../components/ui/MetricCard'
+import { PageHero } from '../components/ui/PageHero'
+import { SectionCard } from '../components/ui/SectionCard'
 import FieldMaps from '../components/FieldMaps'
 import { useAuth } from '../components/AuthProvider'
 
@@ -36,6 +41,8 @@ type TermDateRow = { id: string; meeting_date: string } // YYYY-MM-DD
 export default function AdminFieldReservations() {
   const toast = useToast()
   const { user } = useAuth()
+  const { currentScoutYear } = useScoutYear()
+  const yearBounds = getScoutYearBounds(currentScoutYear)
 
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState<string | null>(null)
@@ -57,8 +64,9 @@ export default function AdminFieldReservations() {
   const hasTermDates = termDates.length > 0
   const [useCustomDay, setUseCustomDay] = useState<boolean>(false)
   const [selectedDay, setSelectedDay] = useState<string>('') // YYYY-MM-DD
-  const minDate = termMeta?.start_date || undefined
-  const maxDate = termMeta?.end_date || undefined
+  const selectedTermBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
+  const minDate = selectedTermBounds?.start
+  const maxDate = selectedTermBounds?.end
 
   // بيانات حجوزات الأرض
   const [rows, setRows] = useState<Row[]>([])
@@ -111,7 +119,7 @@ export default function AdminFieldReservations() {
 }
 
 
-  useEffect(() => { init() }, [])
+  useEffect(() => { setRows([]); setSummaryRows([]); setMaterialsRows([]); setTermId(''); setTerms([]); if (currentScoutYear?.id) void init() }, [currentScoutYear?.id])
   async function init() {
     setLoading(true)
     try {
@@ -126,7 +134,7 @@ export default function AdminFieldReservations() {
       const today = new Date()
       const pad=(n:number)=>String(n).padStart(2,'0')
       const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`
-      setDayDate(todayStr)
+      setDayDate(clampDateToBounds(todayStr, yearBounds))
 
       // حمّل مسميات الأدوات
       await loadMaterialNames()
@@ -139,15 +147,9 @@ export default function AdminFieldReservations() {
   }
 
   async function loadTerms() {
-    const { data, error } = await scoutYearFrom('v_terms_with_scout_year', 'v_terms_context')
-      .select('id, name, year, start_date, end_date')
-      .eq('is_current', true)
-      .order('year', { ascending: false })
-      .order('name', { ascending: true })
-    if (error) throw error
-    const arr = (data ?? []) as Term[]
+    const arr = (await fetchTerms()) as Term[]
     setTerms(arr)
-    if (arr.length && !termId) setTermId(arr[0].id)
+    setTermId(arr[0]?.id || '')
   }
 
   // لما الترم يتغير، حمّل تواريخه واضبط اختيار اليوم
@@ -158,6 +160,8 @@ export default function AdminFieldReservations() {
         .from('term_meeting_dates')
         .select('id,meeting_date')
         .eq('term_id', termId)
+        .gte('meeting_date', minDate || '9999-01-01')
+        .lte('meeting_date', maxDate || '9999-01-01')
         .order('meeting_date', { ascending: true })
       if (error) { toast.error(error.message || 'تعذر تحميل تواريخ الترم'); return }
       const list = (data ?? []) as TermDateRow[]
@@ -169,11 +173,12 @@ export default function AdminFieldReservations() {
         setUseCustomDay(false)
         setDayDate(d) // ← يحدّث الجداول
       } else {
-        setUseCustomDay(true) // لا يوجد جدول — اسمح بتاريخ حر
+        setUseCustomDay(true) // لا يوجد جدول — اسمح بتاريخ داخل السنة فقط
+        setDayDate(clampDateToBounds(dayDate, selectedTermBounds))
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [termId])
+  }, [termId, currentScoutYear?.id, minDate, maxDate])
 
   async function loadMaterialNames() {
     const candidates = [
@@ -195,7 +200,7 @@ export default function AdminFieldReservations() {
     }
   }
 
-  useEffect(() => { if (dayDate) refreshAll() }, [dayDate, teamId])
+  useEffect(() => { if (dayDate && inDateBounds(dayDate, selectedTermBounds)) refreshAll(); else { setRows([]); setSummaryRows([]); setMaterialsRows([]) } }, [dayDate, teamId, currentScoutYear?.id, minDate, maxDate])
 
   function getDayBounds(d: string) {
     const start = new Date(d + 'T00:00:00')
@@ -209,7 +214,7 @@ export default function AdminFieldReservations() {
 
   // حجوزات الأرض
   async function refreshReservations() {
-    if (!dayDate) return
+    if (!inDateBounds(dayDate, selectedTermBounds)) return
     const { startISO, endISO } = getDayBounds(dayDate)
     setLoading(true)
     try {
@@ -226,7 +231,7 @@ export default function AdminFieldReservations() {
 
   // ملخص اليوم
   async function refreshSummary() {
-    if (!dayDate) return
+    if (!inDateBounds(dayDate, selectedTermBounds)) return
     setSummaryLoading(true)
     try {
       const { startISO, endISO } = getDayBounds(dayDate)
@@ -260,7 +265,7 @@ export default function AdminFieldReservations() {
 
   // حجوزات الأدوات
   async function refreshMaterialsForDay() {
-    if (!dayDate) return
+    if (!inDateBounds(dayDate, selectedTermBounds)) return
     setMaterialsLoading(true)
     setMaterialsRows([])
     setMaterialsSource(null)
@@ -691,367 +696,121 @@ export default function AdminFieldReservations() {
     setDayDate(v) // ← هذا هو الفلتر المعتمد
   }
 
+  const reservedZoneCount = useMemo(() => new Set(rows.map((row) => row.field_zone_id).filter(Boolean)).size, [rows])
+  const visibleTeamCount = useMemo(() => new Set(summaryRows.map((row) => row.team_id).filter(Boolean)).size, [summaryRows])
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="field123-page space-y-5 p-4 md:p-6">
       <PageLoader visible={loading} text="جاري التحميل..." />
 
-      <h1 className="text-xl font-bold">إدارة حجوزات الأرض</h1>
+      <PageHero
+        className="field123-hero"
+        eyebrow="الأرض والحجوزات"
+        title="إدارة الأرض"
+        description="راجع خريطة الأرض، اختر الترم واليوم والفريق، ثم تابع حجوزات الأرض والأدوات وعدّلها أو ألغها بنفس الوظائف الحالية."
+        badge={<span className="field123-hero-badge">Field Admin</span>}
+      />
 
-      {/* الخرائط دائمًا */}
-      <FieldMaps className="mb-4" sticky height="h-72 md:h-[28rem]" />
-
-      {/* فلاتر: ترم + تاريخ + فريق */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 items-end">
-        {/* الترم */}
-        <div>
-          <label className="text-sm">الترم</label>
-          <select
-            className="border rounded-xl p-2 w-full min-w-0"
-            value={termId}
-            onChange={e=>setTermId(e.target.value)}
-          >
-            {terms.map(t => (
-              <option key={t.id} value={t.id}>{t.year} — {t.name}</option>
-            ))}
-          </select>
-          {termMeta?.start_date && termMeta?.end_date && (
-            <div className="text-[11px] text-gray-500 mt-1">
-              نطاق الترم: {termMeta.start_date} → {termMeta.end_date}
-            </div>
-          )}
-        </div>
-
-        {/* التاريخ (من جدول الترم أو custom) */}
-        <div>
-          <label className="text-sm">التاريخ</label>
-          {hasTermDates && !useCustomDay ? (
-            <>
-              <select
-                className="border rounded-xl p-2 w-full min-w-0"
-                value={selectedDay}
-                onChange={e=>onTermDayChange(e.target.value)}
-              >
-                {termDates.map(d => (
-                  <option key={d.id} value={d.meeting_date}>{d.meeting_date}</option>
-                ))}
-                <option value="__custom__">— تاريخ آخر —</option>
-              </select>
-              <div className="text-[11px] text-gray-500 mt-1">
-                اختر تاريخًا من جدول الترم أو اختر “تاريخ آخر”.
-              </div>
-            </>
-          ) : (
-            <>
-              <input
-                type="date"
-                className="border rounded-xl p-2 w-full min-w-0"
-                value={dayDate}
-                onChange={e=>setDayDate(e.target.value)}
-                min={minDate}
-                max={maxDate}
-              />
-              {hasTermDates && (
-                <button
-                  type="button"
-                  className="text-[12px] underline mt-1"
-                  onClick={()=>{
-                    if (termDates.length){
-                      setUseCustomDay(false)
-                      const d = termDates[0].meeting_date
-                      setSelectedDay(d)
-                      setDayDate(d)
-                    }
-                  }}
-                >
-                  الرجوع لاختيار من جدول الترم
-                </button>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* الفريق */}
-        <div>
-          <label className="text-sm">الفريق</label>
-          <select
-            className="border rounded-xl p-2 w-full min-w-0 cursor-pointer"
-            value={teamId}
-            onChange={e=>setTeamId(e.target.value)}
-          >
-            <option value="all">كل الفرق</option>
-            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-
-        <div className="text-end mt-2 sm:mt-0">
-          <button className="btn border w-full sm:w-auto" onClick={refreshAll}>تحديث</button>
-        </div>
+      <div className="field123-kpis grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="إجمالي القطاعات" value={zones.length} hint="القطاعات النشطة المتاحة للحجز" accent="navy" />
+        <MetricCard label="حجوزات الأرض في اليوم" value={rows.length} hint={dayDate || 'اختر اليوم'} accent="amber" />
+        <MetricCard label="قطاعات مستخدمة" value={reservedZoneCount} hint={rows.length ? 'ضمن نتائج اليوم الحالية' : 'لا توجد حجوزات'} accent="emerald" />
+        <MetricCard label="حجوزات الأدوات في اليوم" value={materialsRows.length} hint={visibleTeamCount ? `${visibleTeamCount} فريق في الملخص` : 'حسب الفلتر الحالي'} accent="sky" />
       </div>
 
-      {/* ملخص اليوم */}
-      <section className="card space-y-3">
-        <div className="flex flex-wrap items-end gap-3 justify-between">
-          <h2 className="text-lg font-semibold">ملخص اليوم — عدد الأرض المحجوزة</h2>
-          <div className="text-sm text-gray-600">التاريخ: {dayDate || '—'}</div>
-        </div>
+      <SectionCard className="field123-filter-card" title="اختيار نطاق العمل" description="نفس فلاتر الترم والتاريخ والفريق المستخدمة حاليًا، لكن في شريط واحد أوضح.">
+        <div className="field123-filterbar">
+          <label className="field123-field">
+            <span>الترم</span>
+            <select value={termId} onChange={e=>setTermId(e.target.value)}>{terms.map(t => <option key={t.id} value={t.id}>{t.year} — {t.name}</option>)}</select>
+            {termMeta?.start_date && termMeta?.end_date && <small>{termMeta.start_date} → {termMeta.end_date}</small>}
+          </label>
 
+          <label className="field123-field">
+            <span>التاريخ</span>
+            {hasTermDates && !useCustomDay ? (
+              <select value={selectedDay} onChange={e=>onTermDayChange(e.target.value)}>{termDates.map(d => <option key={d.id} value={d.meeting_date}>{d.meeting_date}</option>)}<option value="__custom__">— تاريخ آخر —</option></select>
+            ) : (
+              <input type="date" value={dayDate} onChange={e=>setDayDate(clampDateToBounds(e.target.value, selectedTermBounds))} min={minDate} max={maxDate} />
+            )}
+            {hasTermDates && useCustomDay && <button type="button" className="field123-inline-link" onClick={()=>{ if (termDates.length) { setUseCustomDay(false); const d=termDates[0].meeting_date; setSelectedDay(d); setDayDate(d) } }}>الرجوع لجدول الترم</button>}
+          </label>
+
+          <label className="field123-field"><span>الفريق</span><select value={teamId} onChange={e=>setTeamId(e.target.value)}><option value="all">كل الفرق</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+          <button type="button" className="field123-refresh" onClick={refreshAll}>تحديث البيانات</button>
+        </div>
+      </SectionCard>
+
+      <SectionCard className="field123-map-card" title="خريطة الأرض" description="الخريطة الحالية تظل كما هي وتستخدم نفس البيانات، مع إبرازها كجزء أساسي من مساحة الإدارة.">
+        <FieldMaps className="field123-map" sticky height="h-72 md:h-[28rem]" />
+      </SectionCard>
+
+      <SectionCard className="field123-summary-card" title={`ملخص اليوم — ${dayDate || 'بدون تاريخ'}`} description="عدد حجوزات الأرض لكل فريق في اليوم والفلتر المختارين." actions={<span className="field123-chip">{summaryRows.length} فريق</span>}>
         <PageLoader visible={summaryLoading} text="جاري حساب الملخص..." />
-        <div className="border rounded-2xl w-full max-w-full overflow-x-auto" dir="ltr" style={{ WebkitOverflowScrolling: 'touch' as any }}>
-          <table className="w-full min-w-[520px] text-xs sm:text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-center">عدد الحجوزات</th>
-                <th className="p-2 text-start">الفريق</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summaryRows.map(r => (
-                <tr key={r.team_id} className="border-t">
-                  <td className="p-2 text-center">{r.reservations}</td>
-                  <td className="p-2">{r.team_name}</td>
-                </tr>
-              ))}
-              {summaryRows.length === 0 && (
-                <tr>
-                  <td className="p-3 text-center text-gray-500" colSpan={2}>لا توجد حجوزات في هذا اليوم</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="field123-summary-grid">
+          {summaryRows.map(row => (
+            <article key={row.team_id}><span>⚜</span><div><strong>{row.team_name}</strong><small>{row.distinct_zones} قطاع مختلف</small></div><b>{row.reservations}</b></article>
+          ))}
+          {summaryRows.length === 0 && !summaryLoading && <div className="field123-empty-card">لا توجد حجوزات أرض في هذا اليوم{teamId !== 'all' ? ' لهذا الفريق' : ''}.</div>}
         </div>
-      </section>
+      </SectionCard>
 
-      {/* حجوزات الأدوات (مع تعديل/إلغاء) */}
-      <section className="card space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">حجوزات الأدوات — نفس اليوم</h2>
-          {materialsSource && <div className="text-xs text-gray-500">المصدر: {materialsSource}</div>}
-        </div>
+      <SectionCard className="field123-materials-card" title="حجوزات الأدوات في اليوم" description="نفس حجوزات الأدوات الحالية مع التعديل والإلغاء والكمية ومن/إلى بالدقيقة." actions={<span className="field123-chip is-blue">{materialsRows.length} حجز</span>}>
         <PageLoader visible={materialsLoading} text="جاري تحميل حجوزات الأدوات..." />
-        <div className="border rounded-2xl w-full max-w-full overflow-x-auto" dir="ltr" style={{ WebkitOverflowScrolling: 'touch' as any }}>
-          <table className="w-full min-w-[980px] text-xs sm:text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-center">إلغاء الحجز</th>
-                <th className="p-2 text-center">تحرير</th>
-                <th className="p-2 text-start whitespace-nowrap">إلى</th>
-                <th className="p-2 text-start whitespace-nowrap">من</th>
-                <th className="p-2 text-center">الكمية</th>
-                <th className="p-2 text-start">الأداة</th>
-                <th className="p-2 text-start">الفريق</th>
-              </tr>
-            </thead>
+        <div className="field123-table-wrap" dir="ltr" style={{ WebkitOverflowScrolling: 'touch' as any }}>
+          <table className="field123-table min-w-[980px]">
+            <thead><tr><th>إلغاء الحجز</th><th>تحرير</th><th>إلى</th><th>من</th><th>الكمية</th><th>الأداة</th><th>الفريق</th></tr></thead>
             <tbody>
               {materialsRows.map((r:any) => {
                 const teamName = getTeamNameFromRow(r)
                 const itemName = getMaterialNameFromRow(r)
                 const qty = (r.quantity ?? r.qty ?? r.count ?? r.amount ?? 1) as number
                 const start = (r.starts_at || '')
-                const end   = (r.ends_at   || '')
+                const end = (r.ends_at || '')
                 const startDisp = start ? start.slice(0,16).replace('T',' ') : '—'
-                const endDisp   = end   ? end.slice(0,16).replace('T',' ')   : '—'
+                const endDisp = end ? end.slice(0,16).replace('T',' ') : '—'
                 const key = r.id || `${teamName}-${itemName}-${start}`
-
                 const canEdit = !!r.id && !!editableMaterialsBaseTable()
                 const isEditing = editingMatId === r.id
-
                 return (
-                  <tr key={key} className="border-t align-top">
-                    <td className="p-2 text-center">
-                      <button
-                        className="btn border"
-                        disabled={!canEdit || cancellingMatId===r.id}
-                        onClick={()=>cancelMaterialReservation(r)}
-                        title={canEdit ? '' : 'غير قابل للإلغاء (مصدر البيانات View)'}
-                      >
-                        {cancellingMatId===r.id ? '...' : 'إلغاء'}
-                      </button>
-                    </td>
-
-                    <td className="p-2 text-center">
-                      {isEditing ? (
-                        <div className="flex items-center justify-center gap-2">
-                          <LoadingButton
-                            loading={savingMatId===r.id}
-                            onClick={saveEditMat}
-                          >
-                            حفظ
-                          </LoadingButton>
-                          <button className="btn border" onClick={cancelEditMat}>إلغاء التعديل</button>
-                        </div>
-                      ) : (
-                        <button
-                          className="btn border"
-                          disabled={!canEdit}
-                          onClick={()=>startEditMat(r)}
-                          title={canEdit ? '' : 'غير قابل للتعديل (مصدر البيانات View)'}
-                        >
-                          تعديل
-                        </button>
-                      )}
-                    </td>
-
-                    <td className="p-2">
-                      {isEditing ? (
-                        <input
-                          type="datetime-local"
-                          className="border rounded-xl p-1 w-48"
-                          value={editingMatDraft?.ends_at ?? normalizeDTLocal(end)}
-                          onChange={e=>setEditingMatDraft(d => d ? { ...d, ends_at: e.target.value } : d)}
-                        />
-                      ) : endDisp}
-                    </td>
-
-                    <td className="p-2">
-                      {isEditing ? (
-                        <input
-                          type="datetime-local"
-                          className="border rounded-xl p-1 w-48"
-                          value={editingMatDraft?.starts_at ?? normalizeDTLocal(start)}
-                          onChange={e=>setEditingMatDraft(d => d ? { ...d, starts_at: e.target.value } : d)}
-                        />
-                      ) : startDisp}
-                    </td>
-
-                    <td className="p-2 text-center">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          min={1}
-                          className="border rounded-xl p-1 w-24 text-center"
-                          value={editingMatDraft?.quantity ?? 1}
-                          onChange={e=>setEditingMatDraft(d => d ? { ...d, quantity: e.target.value } : d)}
-                        />
-                      ) : qty}
-                    </td>
-
-                    <td className="p-2">{itemName}</td>
-                    <td className="p-2">{teamName}</td>
+                  <tr key={key}>
+                    <td className="text-center"><button className="field123-danger-btn" disabled={!canEdit || cancellingMatId===r.id} onClick={()=>cancelMaterialReservation(r)} title={canEdit ? '' : 'غير قابل للإلغاء (مصدر البيانات View)'}>{cancellingMatId===r.id ? '...' : 'إلغاء'}</button></td>
+                    <td className="text-center">{isEditing ? <div className="field123-actions"><LoadingButton loading={savingMatId===r.id} onClick={saveEditMat}>حفظ</LoadingButton><button className="field123-secondary-btn" onClick={cancelEditMat}>إلغاء التعديل</button></div> : <button className="field123-edit-btn" disabled={!canEdit} onClick={()=>startEditMat(r)} title={canEdit ? '' : 'غير قابل للتعديل (مصدر البيانات View)'}>تعديل</button>}</td>
+                    <td>{isEditing ? <input type="datetime-local" className="field123-inline-input" value={editingMatDraft?.ends_at ?? normalizeDTLocal(end)} onChange={e=>setEditingMatDraft(d => d ? { ...d, ends_at:e.target.value } : d)} /> : endDisp}</td>
+                    <td>{isEditing ? <input type="datetime-local" className="field123-inline-input" value={editingMatDraft?.starts_at ?? normalizeDTLocal(start)} onChange={e=>setEditingMatDraft(d => d ? { ...d, starts_at:e.target.value } : d)} /> : startDisp}</td>
+                    <td className="text-center">{isEditing ? <input type="number" min={1} className="field123-inline-input is-qty" value={editingMatDraft?.quantity ?? 1} onChange={e=>setEditingMatDraft(d => d ? { ...d, quantity:e.target.value } : d)} /> : <span className="field123-qty">{qty}</span>}</td>
+                    <td><strong>{itemName}</strong></td><td><span className="field123-team">{teamName}</span></td>
                   </tr>
                 )
               })}
-              {materialsRows.length === 0 && !materialsLoading && (
-                <tr>
-                  <td className="p-3 text-center text-gray-500" colSpan={7}>
-                    لا توجد حجوزات أدوات في هذا اليوم{teamId!=='all' ? ' لهذا الفريق' : ''}
-                  </td>
-                </tr>
-              )}
+              {materialsRows.length===0 && !materialsLoading && <tr><td className="field123-empty" colSpan={7}>لا توجد حجوزات أدوات في هذا اليوم{teamId!=='all' ? ' لهذا الفريق' : ''}.</td></tr>}
             </tbody>
           </table>
         </div>
-      </section>
+      </SectionCard>
 
-      {/* الجدول الرئيسي (حجوزات الأرض) */}
-      <div className="border rounded-2xl w-full max-w-full overflow-x-auto" dir="ltr" style={{ WebkitOverflowScrolling: 'touch' as any }}>
-        <table className="w-full min-w-[920px] text-xs sm:text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 text-center">إلغاء</th>
-              <th className="p-2 text-center">حفظ</th>
-              <th className="p-2 text-start">النوع</th>
-              <th className="p-2 text-start whitespace-nowrap">تاريخ الاجتماع</th>
-              <th className="p-2 text-start whitespace-nowrap">إلى</th>
-              <th className="p-2 text-start whitespace-nowrap">من</th>
-              <th className="p-2 text-start">القطاع</th>
-              <th className="p-2 text-start">الفريق</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(r => (
-              <tr key={r.id} className="border-t">
-                <td className="p-2 text-center">
-                  <button
-                    className="btn border w-full sm:w-auto"
-                    disabled={deletingId===r.id}
-                    onClick={()=>softDelete(r.id)}
-                  >
-                    {deletingId===r.id ? '...' : 'إلغاء'}
-                  </button>
-                </td>
-
-                <td className="p-2 text-center">
-                  <LoadingButton
-                    className="w-full sm:w-auto"
-                    loading={savingId===r.id}
-                    onClick={()=>saveRow(r)}
-                  >
-                    حفظ
-                  </LoadingButton>
-                </td>
-
-                <td className="p-2">
-                  <select
-                    className="border rounded-xl p-1 w-full sm:w-auto min-w-0"
-                    value={r.mtype ?? 'meeting'}
-                    onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x, mtype: e.target.value as any}:x))}
-                  >
-                    <option value="preparation">تحضير</option>
-                    <option value="meeting">اجتماع</option>
-                  </select>
-                </td>
-
-                <td className="p-2">
-                  <input
-                    type="date"
-                    className="border rounded-xl p-1 w-full sm:w-auto min-w-0"
-                    value={r.meeting_date ?? ''}
-                    onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x, meeting_date: e.target.value}:x))}
-                    min={minDate}
-                    max={maxDate}
-                  />
-                </td>
-
-                <td className="p-2">
-                  <input
-                    type="datetime-local"
-                    className="border rounded-xl p-1 w-full sm:w-auto min-w-0"
-                    value={r.ends_at?.slice(0,16)}
-                    onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x, ends_at: e.target.value}:x))}
-                  />
-                </td>
-
-                <td className="p-2">
-                  {/* مبدئيًا خليه حر؛ لو حابب نخليه من تواريخ الترم لكل صف نقدر نزود لوجيك خاص لاحقًا */}
-                  <input
-                    type="datetime-local"
-                    className="border rounded-xl p-1 w-full sm:w-auto min-w-0"
-                    value={r.meeting_date ?? ''}
-                    onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x, meeting_date: e.target.value}:x))}
-                    min={minDate}
-                    max={maxDate}
-                  />
-                </td>
-
-                <td className="p-2">
-                  <select
-                    className="border rounded-xl p-1 w-full sm:w-auto min-w-0"
-                    value={r.field_zone_id}
-                    onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x, field_zone_id: e.target.value}:x))}
-                  >
-                    {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
-                  </select>
-                </td>
-
-                <td className="p-2">
-                  <select
-                    className="border rounded-xl p-1 w-full sm:w-auto min-w-0"
-                    value={r.team_id}
-                    onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x, team_id: e.target.value}:x))}
-                  >
-                    {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td className="p-3 text-center text-gray-500" colSpan={8}>لا توجد سجلات لهذا اليوم</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <SectionCard className="field123-reservations-card" title="حجوزات الأرض" description="كل الحقول الحالية ما زالت قابلة للتعديل والحفظ والإلغاء كما كانت." actions={<span className="field123-chip is-gold">{rows.length} حجز</span>}>
+        <div className="field123-table-wrap" dir="ltr" style={{ WebkitOverflowScrolling: 'touch' as any }}>
+          <table className="field123-table min-w-[920px]">
+            <thead><tr><th>إلغاء</th><th>حفظ</th><th>النوع</th><th>تاريخ الاجتماع</th><th>إلى</th><th>من</th><th>القطاع</th><th>الفريق</th></tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id}>
+                  <td className="text-center"><button className="field123-danger-btn" disabled={deletingId===r.id} onClick={()=>softDelete(r.id)}>{deletingId===r.id ? '...' : 'إلغاء'}</button></td>
+                  <td className="text-center"><LoadingButton loading={savingId===r.id} onClick={()=>saveRow(r)}>حفظ</LoadingButton></td>
+                  <td><select className="field123-inline-input" value={r.mtype ?? 'meeting'} onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x,mtype:e.target.value as any}:x))}><option value="preparation">تحضير</option><option value="meeting">اجتماع</option></select></td>
+                  <td><input type="date" className="field123-inline-input" value={r.meeting_date ?? ''} onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x,meeting_date:e.target.value}:x))} min={minDate} max={maxDate} /></td>
+                  <td><input type="datetime-local" className="field123-inline-input" value={r.ends_at?.slice(0,16)} onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x,ends_at:e.target.value}:x))} /></td>
+                  <td><input type="datetime-local" className="field123-inline-input" value={r.meeting_date ?? ''} onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x,meeting_date:e.target.value}:x))} min={minDate} max={maxDate} /></td>
+                  <td><select className="field123-inline-input" value={r.field_zone_id} onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x,field_zone_id:e.target.value}:x))}>{zones.map(z=><option key={z.id} value={z.id}>{z.name}</option>)}</select></td>
+                  <td><select className="field123-inline-input" value={r.team_id} onChange={e=>setRows(prev=>prev.map(x=>x.id===r.id?{...x,team_id:e.target.value}:x))}>{teams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}</select></td>
+                </tr>
+              ))}
+              {rows.length===0 && <tr><td className="field123-empty" colSpan={8}>لا توجد سجلات لهذا اليوم.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
     </div>
   )
 }

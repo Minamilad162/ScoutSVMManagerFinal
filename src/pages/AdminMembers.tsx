@@ -48,12 +48,23 @@ function roleScopeText(role: CurrentSeasonRole) {
 
 export default function AdminMembers() {
   const { roles, user } = useAuth()
-  const { currentScoutYear, actualCurrentScoutYear } = useScoutYear()
+  const { currentScoutYear, actualCurrentScoutYear, availableYears: globalYears, setViewedScoutYearId } = useScoutYear()
   const isAdmin = roles.some((r) => r.role_slug === 'admin')
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
   const [availableYears, setAvailableYears] = useState<ScoutYearRow[]>([])
-  const selectedYearId = searchParams.get('year') || currentScoutYear?.id || ''
+  // The header Scout Year selector is authoritative across all pages.
+  // Preserve old ?year=<id> deep links (e.g. rollover setup) by applying the
+  // requested year globally and then removing the stale per-page override.
+  useEffect(() => {
+    const requested = searchParams.get('year')
+    if (!requested || !globalYears.some((year) => year.id === requested)) return
+    if (requested !== currentScoutYear?.id) setViewedScoutYearId(requested)
+    const next = new URLSearchParams(searchParams)
+    next.delete('year')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, globalYears, currentScoutYear?.id, setViewedScoutYearId, setSearchParams])
+  const selectedYearId = currentScoutYear?.id || '' 
   const selectedYear = useMemo(
     () => availableYears.find((year) => year.id === selectedYearId) || (currentScoutYear?.id === selectedYearId ? currentScoutYear : null),
     [availableYears, currentScoutYear, selectedYearId]
@@ -660,12 +671,7 @@ export default function AdminMembers() {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,320px)_1fr] md:items-center">
           <select
             value={selectedYearId}
-            onChange={(e) => {
-              const next = new URLSearchParams(searchParams)
-              if (e.target.value) next.set('year', e.target.value)
-              else next.delete('year')
-              setSearchParams(next, { replace: true })
-            }}
+            onChange={(e) => setViewedScoutYearId(e.target.value || null)}
             className="w-full rounded-2xl border border-slate-300 bg-white px-3 py-2.5 font-bold text-slate-800 outline-none"
           >
             {availableYears.map((year) => (

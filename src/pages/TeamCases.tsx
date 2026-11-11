@@ -129,14 +129,14 @@ export default function TeamCases(){
         .from('member_cases')
         .select('id, team_id, member_id, case_type, title, details, severity, effective_from, effective_to, status, pinned, created_at, members:member_id(full_name)')
         .eq('team_id', teamId)
-        .lte('effective_from', currentScoutYear?.end_date ?? '2999-12-31')
+        .gte('effective_from', currentScoutYear?.start_date ?? '9999-01-01')
+        .lte('effective_from', currentScoutYear?.end_date ?? '9999-01-01')
         .order('pinned', { ascending: false })
         .order('status', { ascending: true })
         .order('created_at', { ascending: false })
 
       if (filterStatus !== 'all') q = q.eq('status', filterStatus)
       if (filterType !== 'all') q = q.eq('case_type', filterType)
-      if (currentScoutYear?.start_date) q = q.or(`effective_to.is.null,effective_to.gte.${currentScoutYear.start_date}`)
 
       const { data, error } = await q
       if (error) throw error
@@ -253,16 +253,17 @@ export default function TeamCases(){
   }
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
+    <div className="teamops127-page teamcases127-page space-y-6 p-4 md:p-6">
       <PageLoader visible={loading} text="جاري التحميل..." />
 
       <PageHero
+        className="teamops127-hero teamcases127-hero"
         title="حالات وأعذار الفريق"
         eyebrow={teamName ? `الفريق: ${teamName}` : 'إدارة الحالات'}
         description={`تسجيل الحالات الطبية أو أعذار الغياب أو الملاحظات المهمة ومتابعتها داخل السنة الكشفية الحالية${currentScoutYear ? ` (${currentScoutYear.name})` : ''} مع إمكان التثبيت والأرشفة السريعة.`}
       />
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="teamops127-metrics grid gap-3 md:grid-cols-4">
         <MetricCard label="إجمالي الحالات" value={rows.length} hint="طبقًا للفلاتر الحالية" accent="indigo" />
         <MetricCard label="الأعضاء المتاحون" value={members.length} hint="للإسناد في هذا الفريق" accent="emerald" />
         <MetricCard label="الحالة الحالية" value={filterStatus === 'all' ? 'الكل' : filterStatus === 'open' ? 'نشطة' : 'مؤرشفة'} hint="فلتر العرض" accent="amber" />
@@ -292,7 +293,7 @@ export default function TeamCases(){
       )}
 
       {/* Add form */}
-      <SectionCard title="إضافة حالة أو عذر" description="سجّل الحالة مع النوع ودرجة الأهمية والنطاق الزمني، ويمكنك تثبيتها أعلى القائمة لسهولة المتابعة.">
+      <SectionCard className="teamops127-primary-panel" title="إضافة حالة أو عذر" description="سجّل الحالة مع النوع ودرجة الأهمية والنطاق الزمني، ويمكنك تثبيتها أعلى القائمة لسهولة المتابعة.">
         <div className="grid md:grid-cols-6 gap-2 items-end">
           <div className="md:col-span-2">
             <label className="text-sm">الطالب</label>
@@ -347,7 +348,7 @@ export default function TeamCases(){
       </SectionCard>
 
       {/* Filters */}
-      <SectionCard title="الفلاتر والبحث" description="فلترة الحالات حسب النوع والحالة، مع بحث سريع بالاسم أو العنوان أو التفاصيل.">
+      <SectionCard className="teamops127-filter-panel" title="الفلاتر والبحث" description="فلترة الحالات حسب النوع والحالة، مع بحث سريع بالاسم أو العنوان أو التفاصيل.">
       <section className="flex flex-wrap items-end gap-2">
         <div className="grow md:grow-0">
           <label className="text-sm">بحث</label>
@@ -383,7 +384,7 @@ export default function TeamCases(){
       </SectionCard>
 
       {/* Cards list */}
-      <SectionCard title="قائمة الحالات" description="جميع الحالات المطابقة للفلاتر الحالية، مع إمكانية التثبيت أو الأرشفة السريعة.">
+      <SectionCard className="teamops127-list-panel" title="قائمة الحالات" description="جميع الحالات المطابقة للفلاتر الحالية، مع إمكانية التثبيت أو الأرشفة السريعة.">
       <section className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
         {rows.map(r => (
           <article key={r.id} className={`border rounded-2xl p-3 ${r.pinned ? 'ring-1 ring-blue-200' : ''}`}>

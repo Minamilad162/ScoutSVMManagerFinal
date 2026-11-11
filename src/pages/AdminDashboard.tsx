@@ -8,6 +8,7 @@ import { useToast } from '../components/ui/Toaster'
 import OpsDashboardBlocks from '../pages/OpsDashboardBlocks'
 import { fetchCurrentUserRoles } from '../features/reference/api'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { getScoutYearBounds } from '../lib/scoutYearScope'
 
 type Team = { id: string; name: string }
 type Rank = { id: number; rank_label: string | null }
@@ -22,9 +23,6 @@ type AttendanceRow = {
 
 type RoleRow = { role_slug: string; team_id: string | null }
 
-const THIS_YEAR = new Date().getFullYear()
-const pad = (n:number)=>String(n).padStart(2,'0')
-const yearRange = (y:number)=>({ from: `${y}-01-01`, to: `${y}-12-31` })
 
 function cls(...xs:(string|false|undefined)[]) { return xs.filter(Boolean).join(' ') }
 
@@ -36,8 +34,11 @@ export default function AdminDashboard() {
   const [isAdmin, setIsAdmin] = useState(false)
 
   // ===== Filters =====
-  const [year, setYear] = useState<number>(THIS_YEAR)
-  const [{from, to}, setRange] = useState<{from:string; to:string}>(yearRange(THIS_YEAR))
+  const [{from, to}, setRange] = useState<{from:string; to:string}>({ from: '', to: '' })
+  useEffect(() => {
+    const bounds = getScoutYearBounds(currentScoutYear)
+    setRange(bounds ? { from: bounds.start, to: bounds.end } : { from: '', to: '' })
+  }, [currentScoutYear?.id, currentScoutYear?.start_date, currentScoutYear?.end_date])
   const [teams, setTeams] = useState<Team[]>([])
   const [teamId, setTeamId] = useState<'all'|string>('all')
 
@@ -88,11 +89,12 @@ export default function AdminDashboard() {
   }
 
   // ===== إعادة التحميل عند تغيّر الفلاتر =====
-  useEffect(() => { refreshAll(isAdmin, teams) }, [year, from, to, teamId])
+  useEffect(() => { refreshAll(isAdmin, teams) }, [currentScoutYear?.id, from, to, teamId])
 
   async function refreshAll(_isAdmin:boolean, teamList:Team[]) {
     setLoading(true)
     try {
+      if (!from || !to || !currentScoutYear?.id) { setMeetingsCount(0); setAttRows([]); return }
       // الاجتماعات حسب النطاق + الفريق
       let mq = supabase
         .from('meetings')
@@ -108,9 +110,9 @@ export default function AdminDashboard() {
       // ⚠️ لو عندك أعمدة وقت للحجز تقدر تضيف فلترة زمنية هنا
       const { count: mc } = await supabase.from('materials').select('id', { count:'exact', head:true })
       setMaterialsCount(mc ?? 0)
-      const { count: mrc } = await supabase.from('material_reservations').select('id', { count:'exact', head:true })
+      const { count: mrc } = await supabase.from('material_reservations').select('id', { count:'exact', head:true }).gte('starts_at', `${from}T00:00:00`).lte('starts_at', `${to}T23:59:59`)
       setMatReservationsCount(mrc ?? 0)
-      const { count: frc } = await supabase.from('field_reservations').select('id', { count:'exact', head:true })
+      const { count: frc } = await supabase.from('field_reservations').select('id', { count:'exact', head:true }).gte('starts_at', `${from}T00:00:00`).lte('starts_at', `${to}T23:59:59`)
       setFieldReservationsCount(frc ?? 0)
 
       // الحضور/الغياب خلال النطاق
@@ -232,13 +234,10 @@ export default function AdminDashboard() {
         description="مؤشرات سريعة عن التشغيل والإدارة والالتزام المالي والتنفيذي، مع فلاتر حسب السنة والفريق والنطاق الزمني."
         actions={
           <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-slate-600">السنة</label>
-            <select className="rounded-2xl border border-slate-300 bg-white px-3 py-2.5 text-sm" value={year} onChange={e=>{
-              const y = Number(e.target.value)
-              setYear(y); setRange(yearRange(y))
-            }}>
-              {Array.from({length:6}).map((_,i)=>{ const y=THIS_YEAR-i; return <option key={y} value={y}>{y}</option> })}
-            </select>
+            <label className="text-sm font-medium text-slate-600">السنة الكشفية</label>
+            <span className="rounded-2xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold">
+              {currentScoutYear?.name || '—'} ({from || '—'} ← {to || '—'})
+            </span>
           </div>
         }
       />

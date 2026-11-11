@@ -1,4 +1,5 @@
 import { getScoutYearViewOverride, isHistoricalScoutYearView, scoutYearFrom, supabase } from '../../lib/supabase'
+import { belongsToScoutYear } from '../../lib/scoutYearScope'
 
 export type TeamOption = { id: string; name: string }
 export type TermOption = {
@@ -98,8 +99,13 @@ export async function fetchCurrentScoutYearId() {
 }
 
 export async function fetchTerms() {
+  // Never fall back to a previous year's terms, even if a stale view is returned.
+  const year = await fetchCurrentScoutYear()
+  if (!year?.id) return [] as TermOption[]
+
   let query = scoutYearFrom('v_terms_with_scout_year', 'v_terms_context')
-    .select('id,name,year,start_date,end_date,scout_year_id') as any
+    .select('id,name,year,start_date,end_date,scout_year_id')
+    .eq('scout_year_id', year.id) as any
 
   if (!isHistoricalScoutYearView()) query = query.eq('is_current', true)
 
@@ -107,7 +113,7 @@ export async function fetchTerms() {
     .order('year', { ascending: false })
     .order('name', { ascending: true })
   if (error) throw error
-  return (data || []) as TermOption[]
+  return ((data || []) as TermOption[]).filter((term) => belongsToScoutYear(term, year))
 }
 
 export async function fetchCurrentUserContext(userId?: string | null) {
@@ -143,8 +149,41 @@ export async function fetchCurrentUserRoles(userId?: string | null) {
     .select('id,user_id,role_id,role_slug,role_label,team_id,team_name,is_active')
     .eq('user_id', resolvedUserId)
     .eq('is_active', true)
+
   if (error) throw error
-  return (data || []) as CurrentUserRole[]
+
+  const currentRoles = ((data || []) as CurrentUserRole[])
+  if (currentRoles.some((role) => role.role_slug === 'admin')) {
+    return currentRoles
+  }
+
+  // Super Admin is a permanent platform entitlement in the legacy user_roles table
+  // used by RLS via public.has_role('admin'). It must not disappear from the UI
+  // simply because the seasonal current-year role view does not contain an admin row.
+  const { data: permanentAdmin, error: adminError } = await supabase.rpc('has_role', {
+    _role: 'admin',
+    _team: null,
+  })
+
+  if (adminError) throw adminError
+
+  if (permanentAdmin === true) {
+    return [
+      ...currentRoles,
+      {
+        id: 'permanent-admin',
+        user_id: resolvedUserId,
+        role_id: -1,
+        role_slug: 'admin',
+        role_label: 'Admin',
+        team_id: null,
+        team_name: null,
+        is_active: true,
+      } as CurrentUserRole,
+    ]
+  }
+
+  return currentRoles
 }
 
 export async function fetchCurrentUserChefTeamIds(userId?: string | null) {

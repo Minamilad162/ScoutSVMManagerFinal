@@ -1,5 +1,7 @@
 // src/pages/TeamSecretary.tsx
 import { useEffect, useMemo, useState } from 'react'
+import { SecretaryFormsWorkspace } from '../features/secretaryForms/SecretaryFormsWorkspace'
+import { canUploadSecretaryForms } from '../features/secretaryForms/permissions'
 import { scoutYearFrom, supabase } from '../lib/supabase'
 import { PageLoader } from '../components/ui/PageLoader'
 import { useToast } from '../components/ui/Toaster'
@@ -13,6 +15,7 @@ import { safeWriteAuditLog } from '../features/audit/api'
 import { buildAttendanceSummary } from '../features/audit/humanize'
 import { getErrorMessage, logError } from '../lib/errors'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { clampDateToBounds, getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 
 type Team = { id: string; name: string }
 type Term = { id: string; name: string; year: number; start_date: string|null; end_date: string|null }
@@ -22,14 +25,14 @@ type DayStatus = 'present'|'abs_excused'|'abs_unexcused'
 
 export default function TeamSecretary() {
   const toast = useToast()
-  const { currentScoutYear } = useScoutYear()
-  const { roles } = useAuth()
+  const { currentScoutYear, actualCurrentScoutYear, isHistoricalView } = useScoutYear()
+  const { roles, user } = useAuth()
   const isAdmin = roles.some(r => r.role_slug === 'admin')
   const isGlobalSec = roles.some(r => r.role_slug === 'responsable_secretary' && (r.team_id === null || r.team_id === undefined))
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [tab, setTab] = useState<'equipiers'|'attendance'>('equipiers')
+  const [tab, setTab] = useState<'equipiers'|'attendance'|'forms'>('equipiers')
 
   const [teams, setTeams] = useState<Team[]>([])
   const [teamId, setTeamId] = useState<string>('')
@@ -91,13 +94,13 @@ export default function TeamSecretary() {
     }
   }
 
-  useEffect(() => { init() }, [])
+  useEffect(() => { if (currentScoutYear?.id) void init(); else { setTerms([]); setList([]); setCounts({}) } }, [currentScoutYear?.id])
   async function init() {
     setLoading(true)
     try {
       const tm = await fetchTerms()
       setTerms(tm)
-      if (tm.length) setTermId(tm[0].id)
+      setTermId(tm[0]?.id || '')
 
       if (isAdmin || isGlobalSec) {
         const ts = await fetchTeams()
@@ -105,15 +108,16 @@ export default function TeamSecretary() {
         if (ts.length) { setTeamId(ts[0].id); setTeamName(ts[0].name) }
       } else {
         const me = await fetchCurrentUserContext()
-        if (!me?.team_id) throw new Error('لا يوجد فريق مرتبط بحسابك')
-        setTeamId(me.team_id)
-        const t = await fetchTeamById(me.team_id)
+        const ownTeamId = me?.team_id || roles.find(r => r.team_id && ['responsable_secretary', 'chef_de_legion'].includes(r.role_slug))?.team_id
+        if (!ownTeamId) throw new Error('لا يوجد فريق مرتبط بحسابك')
+        setTeamId(ownTeamId)
+        const t = await fetchTeamById(ownTeamId)
         setTeamName(t?.name || '—')
       }
 
       const now = new Date(); const pad=(n:number)=>String(n).padStart(2,'0')
       const d = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`
-      setMeetingDate(d)
+      setMeetingDate(clampDateToBounds(d, getScoutYearBounds(currentScoutYear)))
     } catch (e:any) {
       logError('TeamSecretary.init', e)
       toast.error(getErrorMessage(e, 'تعذر التحميل'))
@@ -179,19 +183,10 @@ export default function TeamSecretary() {
   async function refreshCountsYear() {
     try {
       if (!teamId || !termId) { setCounts({}); return }
-      const baseTerm = terms.find(t => t.id === termId)
-      const fallbackYear = baseTerm?.year ?? new Date().getFullYear()
-
-      // نستخدم السنة الكشفية الحالية إن كانت متاحة، وإلا fallback من الترمات بنفس year القديم
-      let start = currentScoutYear?.start_date || null
-      let end = currentScoutYear?.end_date || null
-      if (!start || !end) {
-        const sameYearTerms = terms.filter(t => t.year === fallbackYear)
-        const starts = sameYearTerms.map(t => t.start_date).filter(Boolean) as string[]
-        const ends = sameYearTerms.map(t => t.end_date).filter(Boolean) as string[]
-        start = starts.length ? starts.sort()[0]! : `${fallbackYear}-01-01`
-        end = ends.length ? ends.sort().slice(-1)[0]! : `${fallbackYear}-12-31`
-      }
+      // Do not use a Jan-Dec fallback for school/scout years crossing calendar years.
+      const bounds = getScoutYearBounds(currentScoutYear)
+      if (!bounds) { setCounts({}); return }
+      const { start, end } = bounds
 
       let meetingsQuery = supabase
         .from('meetings')
@@ -340,6 +335,8 @@ export default function TeamSecretary() {
     setSaving(true)
     try {
       if (!meetingDate) throw new Error('اختر تاريخ الاجتماع')
+      const term = terms.find(t => t.id === termId)
+      if (!term || !inDateBounds(meetingDate, getTermYearBounds(currentScoutYear, term))) throw new Error('تاريخ الاجتماع خارج حدود الترم والسنة الكشفية')
       const meetingPayload: any = { team_id: teamId, meeting_date: meetingDate, mtype: 'meeting' }
       if (currentScoutYear?.id) meetingPayload.scout_year_id = currentScoutYear.id
       if (termId) meetingPayload.term_id = termId
@@ -444,15 +441,15 @@ export default function TeamSecretary() {
 
       <PageHero
         eyebrow="السيكرتارية"
-        title="إدارة أفراد الفريق والمتابعة اليومية"
-        description="راجع قائمة الأفراد، أضف أفرادًا جددًا، وسجّل حضور الاجتماعات مع رؤية أوضح للفريق الحالي."
+        title={tab === 'forms' ? 'سكرتارية الفريق · الاستمارات' : tab === 'attendance' ? 'سكرتارية الفريق · الحضور' : 'إدارة أفراد الفريق والمتابعة اليومية'}
+        description={tab === 'forms' ? 'ملفات PDF الخاصة بفريقك، منظمة حسب السنة الكشفية مع إمكانيات عرضها ورفع استمارات جديدة.' : 'راجع قائمة الأفراد، أضف أفرادًا جددًا، وسجّل حضور الاجتماعات مع رؤية أوضح للفريق الحالي.'}
       />
 
-      <div className="grid gap-3 md:grid-cols-3">
+      {tab !== 'forms' && <div className="grid gap-3 md:grid-cols-3">
         <MetricCard label="إجمالي الأفراد" value={list.length} accent="indigo" />
         <MetricCard label="الترمات المتاحة" value={terms.length} accent="sky" />
         <MetricCard label="الفريق الحالي" value={teamName || '—'} accent="emerald" />
-      </div>
+      </div>}
 
       <SectionCard title="نطاق العمل" description="اختر الفريق المطلوب أو راجع بيانات فريقك الحالي، ثم استخدم التبويب المناسب بالأسفل.">
 
@@ -478,12 +475,23 @@ export default function TeamSecretary() {
         </div>
       )}
 
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap" role="tablist" aria-label="أقسام سكرتارية الفريق">
         <button className={`tab ${tab==='equipiers'?'tab-active':''}` } onClick={()=>setTab('equipiers')}>الأولاد (إدارة)</button>
-        {/* <button className={`tab ${tab==='attendance'?'tab-active':''}`} onClick={()=>setTab('attendance')}>حضور الاجتماعات</button> */}
+        <button className={`tab ${tab==='forms'?'tab-active':''}` } onClick={()=>setTab('forms')}>📄 الاستمارات</button>
+        <button type="button" className={`tab ${tab==='attendance'?'tab-active':''}`} onClick={()=>setTab('attendance')}>حضور الاجتماعات</button>
       </div>
 
       </SectionCard>
+
+      {tab === 'forms' && (
+        <SecretaryFormsWorkspace teamId={teamId} teamName={teamName}
+          scoutYearId={currentScoutYear?.id || ''} scoutYearLabel={currentScoutYear?.name || ''}
+          userId={user?.id || null}
+          canUpload={canUploadSecretaryForms({
+            teamId, scoutYearId: currentScoutYear?.id || '', currentPhysicalScoutYearId: actualCurrentScoutYear?.id || null,
+            userId: user?.id || null, isHistoricalView, roles,
+          })} />
+      )}
 
       {/* ===== تبويب الحضور ===== */}
       {tab==='attendance' && (
@@ -502,6 +510,8 @@ export default function TeamSecretary() {
                   type="date"
                   className="border rounded-xl p-2 w-full min-w-0"
                   value={meetingDate}
+                  min={getTermYearBounds(currentScoutYear, terms.find(t => t.id === termId))?.start}
+                  max={getTermYearBounds(currentScoutYear, terms.find(t => t.id === termId))?.end}
                   onChange={async e=>{
                     const v = e.target.value
                     setMeetingDate(v)

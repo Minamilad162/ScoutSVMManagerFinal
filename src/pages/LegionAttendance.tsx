@@ -596,14 +596,17 @@ export default function LegionAttendance() {
     const total = filteredMembers.length
     const present = filteredMembers.filter((m) => dayStatus[m.id]?.present === true).length
     const absent = filteredMembers.filter((m) => dayStatus[m.id]?.present === false).length
-    return { total, present, absent }
+    const excused = filteredMembers.filter((m) => dayStatus[m.id]?.present === false && dayStatus[m.id]?.is_excused === true).length
+    const ratio = total > 0 ? Math.round((present / total) * 100) : 0
+    return { total, present, absent, excused, ratio }
   }, [filteredMembers, dayStatus])
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="teamops127-page legionattendance127-page p-4 md:p-6 space-y-6">
       <PageLoader visible={loading} text="جاري التحميل..." />
 
       <PageHero
+        className="teamops127-hero legionattendance127-hero"
         eyebrow="لوحة متابعة القائد"
         title="غياب/حضور فريقي"
         description="سجّل حضور اليوم، راجع قراءة سريعة للحالة الحالية، واستخدم فلاتر التحليل لقياس الأداء داخل الترم أو على مستوى الفترة الكاملة."
@@ -614,14 +617,16 @@ export default function LegionAttendance() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-        <MetricCard label="الأعضاء الظاهرون" value={todayMetrics.total} accent="indigo" />
+      <div className="teamops127-metrics grid grid-cols-2 gap-3 md:grid-cols-5">
+        <MetricCard label="إجمالي الأعضاء" value={todayMetrics.total} accent="indigo" />
         <MetricCard label="حاضر اليوم" value={todayMetrics.present} accent="emerald" />
-        <MetricCard label="غائب اليوم" value={todayMetrics.absent} accent="amber" />
+        <MetricCard label="غياب بعذر" value={todayMetrics.excused} accent="amber" />
+        <MetricCard label="غائب اليوم" value={todayMetrics.absent} accent="rose" />
+        <MetricCard label="نسبة الحضور" value={`${todayMetrics.ratio}%`} accent="violet" />
       </div>
 
       {/* فلاتر القراءة العامة */}
-      <SectionCard title="فلاتر القراءة العامة" description="بدّل نطاق الحساب أو الترم أو نوع العضو للحصول على زاوية التحليل المناسبة.">
+      <SectionCard className="teamops127-filter-panel" title="فلاتر القراءة العامة" description="بدّل نطاق الحساب أو الترم أو نوع العضو للحصول على زاوية التحليل المناسبة.">
       <div className="grid md:grid-cols-4 gap-3 items-end">
         <div>
           <label className="text-sm">نطاق الحساب</label>
@@ -671,7 +676,7 @@ export default function LegionAttendance() {
       </SectionCard>
 
       {/* تسجيل اليوم */}
-      <SectionCard title="تسجيل حضور/غياب — اليوم" description="اختر التاريخ المناسب وحدّث حالة كل عضو قبل الحفظ النهائي.">
+      <SectionCard className="teamops127-primary-panel" title="تسجيل حضور/غياب — اليوم" description="اختر التاريخ المناسب وحدّث حالة كل عضو قبل الحفظ النهائي.">
 
         <div className="grid md:grid-cols-5 gap-2 items-end">
           <div className="md:col-span-2">
@@ -806,7 +811,7 @@ export default function LegionAttendance() {
       </SectionCard>
 
       {/* فلاتر التحليل الإضافية */}
-      <SectionCard title="فلاتر التحليل" description="فلتر الإحصاءات حسب نوع اليوم أو بتاريخ محدد للوصول لقراءة أدق.">
+      <SectionCard className="teamops127-filter-panel" title="فلاتر التحليل" description="فلتر الإحصاءات حسب نوع اليوم أو بتاريخ محدد للوصول لقراءة أدق.">
         <div className="grid md:grid-cols-3 gap-2 items-end">
           <div>
             <label className="text-sm">نوع اليوم (للتحليل)</label>

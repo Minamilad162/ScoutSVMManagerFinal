@@ -73,7 +73,6 @@ export default function Home() {
       loadCount(),
       loadName(),
       loadTeam(),
-      loadBestChefsShowcase(),
       isAdmin ? loadAdminMetrics() : Promise.resolve(),
     ])
   }
@@ -112,14 +111,17 @@ export default function Home() {
     setTeamName(t?.name ?? '')
   }
 
-  async function loadBestChefsShowcase() {
-    try {
-      setBestChefsShowcase(await fetchBestChefsHomeShowcase())
-    } catch {
-      setBestChefsShowcase(null)
+  useEffect(() => {
+    const yearId = currentScoutYear?.id ?? null
+    let cancelled = false
+    setBestChefsShowcase(null)
+    if (yearId) {
+      void fetchBestChefsHomeShowcase(yearId)
+        .then((showcase) => { if (!cancelled) setBestChefsShowcase(showcase) })
+        .catch(() => { if (!cancelled) setBestChefsShowcase(null) })
     }
-  }
-
+    return () => { cancelled = true }
+  }, [currentScoutYear?.id])
 
   async function loadAdminMetrics() {
     if (!currentScoutYear?.id) {
@@ -150,7 +152,6 @@ export default function Home() {
       { label: 'Member 360', desc: 'ملفك الشخصي الكامل داخل السنة الحالية، مع الأدوار والحضور والمعسكرات والصورة الشخصية.', to: '/app/member-profile', tag: 'Profile' },
       { label: 'إدارة السنة الكشفية', desc: 'تفعيل سنة جديدة أو نسخ هيكل سنة سابقة.', to: '/app/admin-scout-years', tag: 'Setup' },
       { label: 'مسؤوليات السنة', desc: 'توزيع الشيفات على Events وتنظيمات السنة ومتابعة من لم يتم تكليفه.', to: '/app/year-responsibilities', tag: 'Events' },
-      { label: 'بنك المعرفة', desc: 'اسأل النظام عن الحضور، الأدوات، والمسؤوليات مع حماية الأسئلة الحساسة.', to: '/app/knowledge-bank', tag: 'Knowledge' },
       { label: 'الترمات والاجتماعات', desc: 'إدارة ترمات السنة الحالية وخطة الاجتماعات المخططة والتنفيذ الفعلي.', to: '/app/admin-terms-meetings', tag: 'Terms' },
       { label: 'أفضل الـ chefs', desc: 'اختيار أفضل الـ chefs لكل ترم ليظهروا في الصفحة الرئيسية ولكل الحسابات.', to: '/app/admin-best-chefs', tag: 'Spotlight' },
       { label: 'الأعضاء والأدوار', desc: 'إدارة الفريق والرتبة والنوع والأدوار الحالية.', to: '/app/admin-members', tag: 'People' },
@@ -167,7 +168,6 @@ export default function Home() {
     const items: Array<{ label: string; desc: string; to: string; tag: string }> = [
       { label: 'ملفي الشخصي', desc: 'ملف 360 يضم حضورك وأدوارك ومعسكراتك وصورتك الشخصية.', to: '/app/member-profile', tag: 'Profile' },
       { label: 'أفضل الـ chefs', desc: 'شاهد أفضل الـ chefs لكل ترم داخل السنة الحالية.', to: '/app/best-chefs', tag: 'Spotlight' },
-      { label: 'بنك المعرفة', desc: 'اسأل عن بيانات آمنة من السيستم بدون تفاصيل حساسة.', to: '/app/knowledge-bank', tag: 'Knowledge' },
       { label: 'الإشعارات', desc: 'راجع الجديد أو المتبقي عليك بسرعة.', to: '/app/notifications', tag: 'Inbox' },
     ]
 

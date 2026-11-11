@@ -1,61 +1,112 @@
-
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { PageLoader } from '../components/ui/PageLoader'
 import { LoadingButton } from '../components/ui/LoadingButton'
 import { useToast } from '../components/ui/Toaster'
 import { useRoleGate } from '../hooks/useRoleGate'
-import { PageHero } from '../components/ui/PageHero'
-import { MetricCard } from '../components/ui/MetricCard'
-import { SectionCard } from '../components/ui/SectionCard'
 import { InlineAlert } from '../components/ui/InlineAlert'
+import { EmptyState } from '../components/ui/EmptyState'
+import scoutBackpack from '../assets/scout-theme/scout-backpack.webp'
 
-type Material = { id: string; name: string; description: string | null; total_qty: number; active: boolean; storage_location_id: string | null, storage_locations?: { name: string } }
+type Material = {
+  id: string
+  name: string
+  description: string | null
+  total_qty: number
+  active: boolean
+  storage_location_id: string | null
+  storage_locations?: { name: string }
+}
 type StorLoc = { id: string; name: string; description: string | null; active: boolean }
 type Zone = { id: string; name: string; active: boolean }
+type AdminTab = 'materials' | 'storage' | 'zones'
+
+type IconKind = 'box' | 'storage' | 'zone' | 'active' | 'inactive' | 'search' | 'edit' | 'alert'
+
+function InventoryGlyph({ kind = 'box' }: { kind?: IconKind }) {
+  const common = { viewBox: '0 0 48 48', 'aria-hidden': true }
+  if (kind === 'storage') return <svg {...common}><path d="M8 10h32v30H8zM8 20h32M18 20v20M30 20v20M13 15h8M27 15h8"/></svg>
+  if (kind === 'zone') return <svg {...common}><path d="M24 42s14-10 14-23a14 14 0 1 0-28 0c0 13 14 23 14 23Z"/><circle cx="24" cy="19" r="5"/></svg>
+  if (kind === 'active') return <svg {...common}><circle cx="24" cy="24" r="17"/><path d="m16 24 5 5 11-12"/></svg>
+  if (kind === 'inactive') return <svg {...common}><circle cx="24" cy="24" r="17"/><path d="M16 16l16 16M32 16 16 32"/></svg>
+  if (kind === 'search') return <svg {...common}><circle cx="21" cy="21" r="11"/><path d="m30 30 10 10"/></svg>
+  if (kind === 'edit') return <svg {...common}><path d="M9 39h8L39 17l-8-8L9 31v8Z"/><path d="m27 13 8 8"/></svg>
+  if (kind === 'alert') return <svg {...common}><path d="M24 6 43 40H5L24 6Z"/><path d="M24 17v11M24 34h.01"/></svg>
+  return <svg {...common}><path d="m24 6 17 9v18l-17 9-17-9V15l17-9Z"/><path d="m7 15 17 9 17-9M24 24v18"/></svg>
+}
 
 export default function MaterialsAdmin() {
   const toast = useToast()
   const gate = useRoleGate()
-
   const [loading, setLoading] = useState(true)
-
   const [materials, setMaterials] = useState<Material[]>([])
   const [storLocs, setStorLocs] = useState<StorLoc[]>([])
   const [zones, setZones] = useState<Zone[]>([])
 
-  // new/edit material
   const [mName, setMName] = useState('')
   const [mQty, setMQty] = useState<number | ''>('')
-  const [mStor, setMStor] = useState<string>('')
+  const [mStor, setMStor] = useState('')
   const [mDesc, setMDesc] = useState('')
   const [savingM, setSavingM] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
-
-  // new stor loc
   const [sName, setSName] = useState('')
   const [sDesc, setSDesc] = useState('')
   const [savingS, setSavingS] = useState(false)
-
-  // new zone
   const [zName, setZName] = useState('')
   const [savingZ, setSavingZ] = useState(false)
 
-  const metrics = {
+  const [tab, setTab] = useState<AdminTab>('materials')
+  const [materialSearch, setMaterialSearch] = useState('')
+  const [materialStatus, setMaterialStatus] = useState<'all' | 'active' | 'inactive'>('all')
+  const [materialLocation, setMaterialLocation] = useState('all')
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const pageSize = 8
+
+  const metrics = useMemo(() => ({
     materials: materials.length,
     activeMaterials: materials.filter((m) => m.active).length,
-    locations: storLocs.length,
-    zones: zones.length,
-  }
+    inactiveMaterials: materials.filter((m) => !m.active).length,
+    totalUnits: materials.reduce((sum, m) => sum + Number(m.total_qty || 0), 0),
+    locations: storLocs.filter((s) => s.active).length,
+    zones: zones.filter((z) => z.active).length,
+    withoutLocation: materials.filter((m) => !m.storage_location_id).length,
+  }), [materials, storLocs, zones])
 
-  useEffect(() => { init() }, [])
+  const filteredMaterials = useMemo(() => {
+    const q = materialSearch.trim().toLowerCase()
+    return materials.filter((material) => {
+      const matchesSearch = !q || material.name.toLowerCase().includes(q) || (material.description || '').toLowerCase().includes(q) || (material.storage_locations?.name || '').toLowerCase().includes(q)
+      const matchesStatus = materialStatus === 'all' || (materialStatus === 'active' ? material.active : !material.active)
+      const matchesLocation = materialLocation === 'all' || material.storage_location_id === materialLocation || (materialLocation === 'none' && !material.storage_location_id)
+      return matchesSearch && matchesStatus && matchesLocation
+    })
+  }, [materials, materialSearch, materialStatus, materialLocation])
+
+  const totalPages = Math.max(1, Math.ceil(filteredMaterials.length / pageSize))
+  const pagedMaterials = useMemo(() => {
+    const start = (Math.min(page, totalPages) - 1) * pageSize
+    return filteredMaterials.slice(start, start + pageSize)
+  }, [filteredMaterials, page, totalPages])
+
+  const selectedMaterial = useMemo(
+    () => materials.find((material) => material.id === selectedMaterialId) || filteredMaterials[0] || materials[0] || null,
+    [materials, filteredMaterials, selectedMaterialId]
+  )
+
+  useEffect(() => { void init() }, [])
+  useEffect(() => { setPage(1) }, [materialSearch, materialStatus, materialLocation])
+  useEffect(() => {
+    if (!selectedMaterialId && materials[0]) setSelectedMaterialId(materials[0].id)
+  }, [materials, selectedMaterialId])
+
   async function init() {
     setLoading(true)
     try {
       const [{ data: mats, error: me }, { data: sl, error: se }, { data: zs, error: ze }] = await Promise.all([
         supabase.from('materials').select('id,name,description,total_qty,active,storage_location_id, storage_locations:storage_location_id(name)').order('name'),
         supabase.from('storage_locations').select('id,name,description,active').order('name'),
-        supabase.from('field_zones').select('id,name,active').order('name')
+        supabase.from('field_zones').select('id,name,active').order('name'),
       ])
       if (me) throw me
       if (se) throw se
@@ -63,7 +114,7 @@ export default function MaterialsAdmin() {
       setMaterials((mats as any) ?? [])
       setStorLocs((sl as any) ?? [])
       setZones((zs as any) ?? [])
-    } catch (e:any) {
+    } catch (e: any) {
       toast.error(e.message || 'تعذر تحميل الداتا')
     } finally {
       setLoading(false)
@@ -71,11 +122,32 @@ export default function MaterialsAdmin() {
   }
 
   function resetMaterialForm() {
-    setEditId(null); setMName(''); setMQty(''); setMStor(''); setMDesc('')
+    setEditId(null)
+    setMName('')
+    setMQty('')
+    setMStor('')
+    setMDesc('')
+  }
+
+  function openNewMaterial() {
+    setTab('materials')
+    resetMaterialForm()
+    requestAnimationFrame(() => document.getElementById('materials124-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }
+
+  function startEdit(material: Material) {
+    setTab('materials')
+    setSelectedMaterialId(material.id)
+    setEditId(material.id)
+    setMName(material.name)
+    setMQty(material.total_qty)
+    setMStor(material.storage_location_id || '')
+    setMDesc(material.description || '')
+    requestAnimationFrame(() => document.getElementById('materials124-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
   }
 
   async function saveMaterial() {
-    if (!gate.canManageInventory()) { toast.error('ليست لديك صلاحية إدارة المخزون'); return }
+    if (!gate.canManageInventory()) return toast.error('ليست لديك صلاحية إدارة المخزون')
     if (!mName.trim()) return toast.error('ادخل اسم الأداة')
     const qty = Number(mQty)
     if (!isFinite(qty) || qty < 0) return toast.error('الكمية غير صالحة')
@@ -96,7 +168,7 @@ export default function MaterialsAdmin() {
       }
       resetMaterialForm()
       await init()
-    } catch (e:any) {
+    } catch (e: any) {
       toast.error(e.message || 'تعذر الحفظ')
     } finally {
       setSavingM(false)
@@ -106,20 +178,22 @@ export default function MaterialsAdmin() {
   async function toggleMaterialActive(id: string, current: boolean) {
     if (!gate.canManageInventory()) return
     const { error } = await supabase.from('materials').update({ active: !current }).eq('id', id)
-    if (error) toast.error(error.message); else { toast.success('تم التحديث'); init() }
+    if (error) toast.error(error.message)
+    else { toast.success('تم تحديث حالة الأداة'); await init() }
   }
 
   async function saveStorLoc() {
-    if (!gate.canManageInventory()) { toast.error('ليست لديك صلاحية'); return }
+    if (!gate.canManageInventory()) return toast.error('ليست لديك صلاحية')
     if (!sName.trim()) return toast.error('ادخل اسم المكان')
     setSavingS(true)
     try {
       const { error } = await supabase.from('storage_locations').insert({ name: sName.trim(), description: sDesc || null })
       if (error) throw error
-      setSName(''); setSDesc('')
+      setSName('')
+      setSDesc('')
       toast.success('تم إضافة المكان')
       await init()
-    } catch (e:any) {
+    } catch (e: any) {
       toast.error(e.message || 'تعذر الحفظ')
     } finally {
       setSavingS(false)
@@ -129,11 +203,12 @@ export default function MaterialsAdmin() {
   async function toggleStorActive(id: string, current: boolean) {
     if (!gate.canManageInventory()) return
     const { error } = await supabase.from('storage_locations').update({ active: !current }).eq('id', id)
-    if (error) toast.error(error.message); else { toast.success('تم التحديث'); init() }
+    if (error) toast.error(error.message)
+    else { toast.success('تم التحديث'); await init() }
   }
 
   async function saveZone() {
-    if (!gate.canManageInventory()) { toast.error('ليست لديك صلاحية'); return }
+    if (!gate.canManageInventory()) return toast.error('ليست لديك صلاحية')
     if (!zName.trim()) return toast.error('ادخل اسم القطاع')
     setSavingZ(true)
     try {
@@ -142,7 +217,7 @@ export default function MaterialsAdmin() {
       setZName('')
       toast.success('تم إضافة القطاع')
       await init()
-    } catch (e:any) {
+    } catch (e: any) {
       toast.error(e.message || 'تعذر الحفظ')
     } finally {
       setSavingZ(false)
@@ -152,185 +227,161 @@ export default function MaterialsAdmin() {
   async function toggleZoneActive(id: string, current: boolean) {
     if (!gate.canManageInventory()) return
     const { error } = await supabase.from('field_zones').update({ active: !current }).eq('id', id)
-    if (error) toast.error(error.message); else { toast.success('تم التحديث'); init() }
+    if (error) toast.error(error.message)
+    else { toast.success('تم التحديث'); await init() }
   }
 
   return (
-    <div className="p-6 space-y-8">
-      <PageLoader visible={loading} text="جاري التحميل..." />
+    <div className="materials124-page space-y-5 p-4 md:p-6" dir="rtl">
+      <PageLoader visible={loading} text="جاري تجهيز المخزون..." />
 
-      <PageHero
-        eyebrow="مركز الجرد والتنظيم"
-        title="إدارة الأدوات والأماكن"
-        description="أدر الأدوات ومخازنها وقطاعات الأرض من شاشة واحدة أوضح وأسهل في المتابعة اليومية."
-      />
+      <section className="materials124-hero">
+        <div className="materials124-hero-copy">
+          <span className="materials124-eyebrow">مركز إدارة الأدوات</span>
+          <h1>إدارة الأدوات</h1>
+          <p>إدارة وتنظيم أدوات ومعدات الفرقة الكشفية ومتابعة الكميات، حالة التفعيل ومكان التخزين من شاشة واحدة.</p>
+          <div className="materials124-hero-actions">
+            <button type="button" className="materials124-primary" onClick={openNewMaterial}><span>＋</span> إضافة أداة</button>
+            <button type="button" className="materials124-secondary" onClick={() => setTab('storage')}><InventoryGlyph kind="storage" /> أماكن التخزين</button>
+          </div>
+        </div>
+        <div className="materials124-hero-art" aria-hidden="true">
+          <img src={scoutBackpack} alt="" />
+          <span className="materials124-art-ring" />
+        </div>
+      </section>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <MetricCard label="الأدوات" value={metrics.materials} accent="indigo" />
-        <MetricCard label="المفعّل منها" value={metrics.activeMaterials} accent="emerald" />
-        <MetricCard label="أماكن التخزين" value={metrics.locations} accent="sky" />
-        <MetricCard label="قطاعات الأرض" value={metrics.zones} accent="amber" />
-      </div>
+      <section className="materials124-kpis" aria-label="ملخص المخزون">
+        <article className="is-blue"><span><InventoryGlyph /></span><div><small>إجمالي الوحدات</small><strong>{metrics.totalUnits}</strong></div></article>
+        <article className="is-green"><span><InventoryGlyph kind="active" /></span><div><small>أنواع مفعّلة</small><strong>{metrics.activeMaterials}</strong></div></article>
+        <article className="is-orange"><span><InventoryGlyph kind="inactive" /></span><div><small>أنواع موقوفة</small><strong>{metrics.inactiveMaterials}</strong></div></article>
+        <article className="is-gold"><span><InventoryGlyph kind="storage" /></span><div><small>أماكن التخزين</small><strong>{metrics.locations}</strong></div></article>
+      </section>
 
       {!gate.canManageInventory() && (
-        <InlineAlert tone="info" title="وضع العرض فقط">
-          هذه الشاشة متاحة الآن للعرض فقط. الإدارة الكاملة مسموحة للأدمن أو المسؤول العام للأدوات.
-        </InlineAlert>
+        <InlineAlert tone="info" title="وضع العرض فقط">هذه الشاشة متاحة للعرض فقط. الإدارة مسموحة للأدمن أو المسؤول العام للأدوات.</InlineAlert>
       )}
 
-      {/* Materials */}
-      <SectionCard title="الأدوات" description="أضف الأدوات أو حدّث كمياتها ومكان تخزينها دون مغادرة الشاشة.">
+      <section className="materials124-tabs" role="tablist" aria-label="أقسام إدارة الأدوات">
+        <button type="button" className={tab === 'materials' ? 'is-active' : ''} onClick={() => setTab('materials')}><InventoryGlyph /><span>الأدوات</span><b>{metrics.materials}</b></button>
+        <button type="button" className={tab === 'storage' ? 'is-active' : ''} onClick={() => setTab('storage')}><InventoryGlyph kind="storage" /><span>أماكن التخزين</span><b>{storLocs.length}</b></button>
+        <button type="button" className={tab === 'zones' ? 'is-active' : ''} onClick={() => setTab('zones')}><InventoryGlyph kind="zone" /><span>قطاعات الأرض</span><b>{zones.length}</b></button>
+      </section>
 
-        <div className="grid md:grid-cols-4 gap-3">
-          <div className="md:col-span-2">
-            <label className="text-sm">اسم الأداة</label>
-            <input className="border rounded-xl p-2 w-full" value={mName} onChange={e=>setMName(e.target.value)} placeholder="مثلاً: حبل، خيمة..." />
-          </div>
-          <div>
-            <label className="text-sm">الكمية</label>
-            <input type="number" min={0} className="border rounded-xl p-2 w-full" value={mQty} onChange={e=>setMQty(e.target.value as any)} />
-          </div>
-          <div>
-            <label className="text-sm">مكان التخزين</label>
-            <select className="border rounded-xl p-2 w-full cursor-pointer" value={mStor} onChange={e=>setMStor(e.target.value)}>
-              <option value="">— بدون —</option>
-              {storLocs.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </div>
-          <div className="md:col-span-4">
-            <label className="text-sm">الوصف</label>
-            <input className="border rounded-xl p-2 w-full" value={mDesc} onChange={e=>setMDesc(e.target.value)} />
-          </div>
-          <div className="md:col-span-4 flex gap-2 justify-end">
-            <LoadingButton loading={savingM} onClick={saveMaterial}>{editId ? 'تعديل' : 'إضافة'}</LoadingButton>
-            {editId && <button className="btn border" onClick={resetMaterialForm}>إلغاء التعديل</button>}
-          </div>
-        </div>
+      {tab === 'materials' && (
+        <>
+          <section className="materials124-toolbar">
+            <label className="materials124-search">
+              <InventoryGlyph kind="search" />
+              <input value={materialSearch} onChange={(e) => setMaterialSearch(e.target.value)} placeholder="ابحث باسم الأداة أو الوصف أو مكان التخزين..." />
+            </label>
+            <label><span>الحالة</span><select value={materialStatus} onChange={(e) => setMaterialStatus(e.target.value as any)}><option value="all">كل الحالات</option><option value="active">مفعّلة</option><option value="inactive">موقوفة</option></select></label>
+            <label><span>مكان التخزين</span><select value={materialLocation} onChange={(e) => setMaterialLocation(e.target.value)}><option value="all">كل الأماكن</option><option value="none">بدون مكان تخزين</option>{storLocs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+            <button type="button" className="materials124-add-compact" onClick={openNewMaterial}>＋ إضافة أداة</button>
+          </section>
 
-        <div className="border rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-start">الأداة</th>
-                <th className="p-2 text-start">المكان</th>
-                <th className="p-2 text-center">الكمية</th>
-                <th className="p-2 text-center">الحالة</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {materials.map(m => (
-                <tr key={m.id} className="border-t">
-                  <td className="p-2">
-                    <div className="font-medium">{m.name}</div>
-                    {m.description && <div className="text-xs text-gray-500">{m.description}</div>}
-                  </td>
-                  <td className="p-2">{m.storage_locations?.name || '—'}</td>
-                  <td className="p-2 text-center">{m.total_qty}</td>
-                  <td className="p-2 text-center">
-                    <button
-                      className={`px-2 py-1 rounded-xl text-xs border ${m.active?'bg-emerald-50 border-emerald-200':'bg-gray-50'}`}
-                      onClick={()=>toggleMaterialActive(m.id, m.active)}
-                      disabled={!gate.canManageInventory()}
-                    >
-                      {m.active ? 'مفعّل' : 'موقوف'}
-                    </button>
-                  </td>
-                  <td className="p-2 text-end">
-                    <button className="btn border text-xs"
-                      onClick={()=>{ setEditId(m.id); setMName(m.name); setMQty(m.total_qty); setMStor(m.storage_location_id || ''); setMDesc(m.description || '') }}>
-                      تعديل
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {materials.length === 0 && <tr><td colSpan={5} className="p-3 text-center text-gray-500">لا توجد أدوات</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
+          <div className="materials124-workspace">
+            <section className="materials124-table-card">
+              <div className="materials124-section-head">
+                <div><span>قائمة المخزون</span><h2>الأدوات والمعدات</h2></div>
+                <span className="materials124-count">{filteredMaterials.length} أداة</span>
+              </div>
 
-      {/* Storage locations */}
-      <SectionCard title="أماكن التخزين" description="أدر أسماء الدواليب والخزائن أو أوقف أي مكان لم يعد مستخدمًا.">
-        <div className="grid md:grid-cols-3 gap-3">
-          <div>
-            <label className="text-sm">الاسم</label>
-            <input className="border rounded-xl p-2 w-full" value={sName} onChange={e=>setSName(e.target.value)} placeholder="Cupboard A" />
-          </div>
-          <div className="md:col-span-2">
-            <label className="text-sm">الوصف</label>
-            <input className="border rounded-xl p-2 w-full" value={sDesc} onChange={e=>setSDesc(e.target.value)} />
-          </div>
-          <div className="md:col-span-3 flex justify-end">
-            <LoadingButton loading={savingS} onClick={saveStorLoc}>إضافة المكان</LoadingButton>
-          </div>
-        </div>
+              {filteredMaterials.length === 0 ? <EmptyState title="لا توجد أدوات مطابقة" description="غيّر البحث أو الفلاتر الحالية." /> : (
+                <div className="materials124-table-wrap">
+                  <table className="materials124-table">
+                    <thead><tr><th>الأداة</th><th>الموقع</th><th>الكمية</th><th>الحالة</th><th>الإجراءات</th></tr></thead>
+                    <tbody>
+                      {pagedMaterials.map((material) => (
+                        <tr key={material.id} className={selectedMaterial?.id === material.id ? 'is-selected' : ''} onClick={() => setSelectedMaterialId(material.id)}>
+                          <td><div className="materials124-tool-name"><span className="materials124-tool-icon"><InventoryGlyph /></span><div><strong>{material.name}</strong><small>{material.description || 'بدون وصف'}</small></div></div></td>
+                          <td><span className="materials124-location">{material.storage_locations?.name || 'بدون مكان تخزين'}</span></td>
+                          <td><strong className="materials124-qty">{material.total_qty}</strong></td>
+                          <td><span className={`materials124-state ${material.active ? 'is-active' : 'is-inactive'}`}>{material.active ? 'مفعّلة' : 'موقوفة'}</span></td>
+                          <td><div className="materials124-row-actions"><button type="button" onClick={(e) => { e.stopPropagation(); startEdit(material) }} aria-label={`تعديل ${material.name}`}><InventoryGlyph kind="edit" /></button><button type="button" className={material.active ? 'danger' : 'success'} onClick={(e) => { e.stopPropagation(); void toggleMaterialActive(material.id, material.active) }} disabled={!gate.canManageInventory()}>{material.active ? 'إيقاف' : 'تفعيل'}</button></div></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
-        <div className="border rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-start">الاسم</th>
-                <th className="p-2 text-start">الوصف</th>
-                <th className="p-2 text-center">الحالة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {storLocs.map(s => (
-                <tr key={s.id} className="border-t">
-                  <td className="p-2">{s.name}</td>
-                  <td className="p-2">{s.description || '—'}</td>
-                  <td className="p-2 text-center">
-                    <button className={`px-2 py-1 rounded-xl text-xs border ${s.active?'bg-emerald-50 border-emerald-200':'bg-gray-50'}`}
-                      onClick={()=>toggleStorActive(s.id, s.active)} disabled={!gate.canManageInventory()}>
-                      {s.active ? 'مفعّل' : 'موقوف'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {storLocs.length === 0 && <tr><td colSpan={3} className="p-3 text-center text-gray-500">لا توجد أماكن</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
+              {filteredMaterials.length > pageSize && (
+                <div className="materials124-pagination">
+                  <span>عرض {(Math.min(page, totalPages) - 1) * pageSize + 1}–{Math.min(Math.min(page, totalPages) * pageSize, filteredMaterials.length)} من {filteredMaterials.length}</span>
+                  <div><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>‹</button>{Array.from({ length: totalPages }, (_, i) => i + 1).slice(Math.max(0, page - 3), Math.min(totalPages, page + 2)).map((p) => <button type="button" key={p} className={page === p ? 'is-active' : ''} onClick={() => setPage(p)}>{p}</button>)}<button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>›</button></div>
+                </div>
+              )}
+            </section>
 
-      {/* Field zones */}
-      <SectionCard title="قطاعات الأرض" description="حافظ على قائمة القطاعات الحالية حتى تبقى الحجوزات والتوزيع أكثر وضوحًا.">
-        <div className="grid md:grid-cols-3 gap-3">
-          <div className="md:col-span-2">
-            <label className="text-sm">اسم القطاع</label>
-            <input className="border rounded-xl p-2 w-full" value={zName} onChange={e=>setZName(e.target.value)} placeholder="A1 / B2 ..." />
-          </div>
-          <div className="md:col-span-1 flex items-end justify-end">
-            <LoadingButton loading={savingZ} onClick={saveZone}>إضافة قطاع</LoadingButton>
-          </div>
-        </div>
+            <aside className="materials124-side">
+              <section className="materials124-detail-card">
+                <div className="materials124-side-title"><div><span>تفاصيل الأداة</span><h2>{selectedMaterial?.name || 'اختر أداة'}</h2></div><span className="materials124-detail-icon"><InventoryGlyph /></span></div>
+                {selectedMaterial ? (
+                  <>
+                    <div className="materials124-detail-grid">
+                      <div><small>الكمية الإجمالية</small><strong>{selectedMaterial.total_qty}</strong></div>
+                      <div><small>الحالة</small><strong className={selectedMaterial.active ? 'good' : 'muted'}>{selectedMaterial.active ? 'مفعّلة' : 'موقوفة'}</strong></div>
+                      <div><small>مكان التخزين</small><strong>{selectedMaterial.storage_locations?.name || 'غير محدد'}</strong></div>
+                    </div>
+                    <p className="materials124-description">{selectedMaterial.description || 'لا يوجد وصف مسجل لهذه الأداة.'}</p>
+                    <div className="materials124-detail-actions"><button type="button" className="materials124-primary" onClick={() => startEdit(selectedMaterial)}><InventoryGlyph kind="edit" /> تعديل الأداة</button><button type="button" className="materials124-secondary" onClick={() => void toggleMaterialActive(selectedMaterial.id, selectedMaterial.active)} disabled={!gate.canManageInventory()}>{selectedMaterial.active ? 'إيقاف الأداة' : 'تفعيل الأداة'}</button></div>
+                  </>
+                ) : <EmptyState title="اختر أداة" description="اضغط على أي صف لعرض تفاصيله هنا." />}
+              </section>
 
-        <div className="border rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-start">الاسم</th>
-                <th className="p-2 text-center">الحالة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {zones.map(s => (
-                <tr key={s.id} className="border-t">
-                  <td className="p-2">{s.name}</td>
-                  <td className="p-2 text-center">
-                    <button className={`px-2 py-1 rounded-xl text-xs border ${s.active?'bg-emerald-50 border-emerald-200':'bg-gray-50'}`}
-                      onClick={()=>toggleZoneActive(s.id, s.active)} disabled={!gate.canManageInventory()}>
-                      {s.active ? 'مفعّل' : 'موقوف'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {zones.length === 0 && <tr><td colSpan={2} className="p-3 text-center text-gray-500">لا توجد قطاعات</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
+              <section className="materials124-alerts-card">
+                <div className="materials124-side-title"><div><span>تنبيهات المخزون</span><h2>ملاحظات سريعة</h2></div><span className="materials124-detail-icon is-alert"><InventoryGlyph kind="alert" /></span></div>
+                <div className="materials124-alert-list">
+                  <div><span className="is-orange">!</span><p><strong>أدوات بدون مكان تخزين</strong><small>{metrics.withoutLocation} أداة تحتاج تحديد مكان تخزين.</small></p></div>
+                  <div><span className="is-blue">i</span><p><strong>أدوات موقوفة</strong><small>{metrics.inactiveMaterials} نوع أداة موقوف حاليًا.</small></p></div>
+                </div>
+              </section>
+            </aside>
+          </div>
+
+          <section id="materials124-editor" className="materials124-editor-card">
+            <div className="materials124-section-head">
+              <div><span>{editId ? 'تعديل الأداة المختارة' : 'إضافة أداة جديدة'}</span><h2>{editId ? mName || 'تعديل البيانات' : 'بيانات الأداة'}</h2></div>
+              <span className="materials124-detail-icon"><InventoryGlyph kind={editId ? 'edit' : 'box'} /></span>
+            </div>
+            <div className="materials124-editor-grid">
+              <label><span>اسم الأداة</span><input value={mName} onChange={(e) => setMName(e.target.value)} placeholder="مثلاً: خيمة كبيرة" /></label>
+              <label><span>الكمية الإجمالية</span><input type="number" min={0} value={mQty} onChange={(e) => setMQty(e.target.value === '' ? '' : Number(e.target.value))} /></label>
+              <label><span>مكان التخزين</span><select value={mStor} onChange={(e) => setMStor(e.target.value)}><option value="">— بدون —</option>{storLocs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+              <label className="materials124-editor-wide"><span>الوصف / ملاحظات</span><textarea rows={3} value={mDesc} onChange={(e) => setMDesc(e.target.value)} placeholder="وصف مختصر يساعد المسؤولين على معرفة الأداة..." /></label>
+            </div>
+            <div className="materials124-editor-actions">{editId && <button type="button" className="materials124-secondary" onClick={resetMaterialForm}>إلغاء التعديل</button>}<LoadingButton loading={savingM} onClick={saveMaterial} disabled={!gate.canManageInventory()}>{editId ? 'حفظ التعديل' : 'إضافة الأداة'}</LoadingButton></div>
+          </section>
+        </>
+      )}
+
+      {tab === 'storage' && (
+        <section className="materials124-management-card">
+          <div className="materials124-section-head"><div><span>تنظيم المخزن</span><h2>أماكن التخزين</h2></div><span className="materials124-detail-icon"><InventoryGlyph kind="storage" /></span></div>
+          <div className="materials124-create-row">
+            <label><span>اسم المكان</span><input value={sName} onChange={(e) => setSName(e.target.value)} placeholder="مثلاً: دولاب A" /></label>
+            <label><span>الوصف</span><input value={sDesc} onChange={(e) => setSDesc(e.target.value)} placeholder="مكانه أو محتواه..." /></label>
+            <LoadingButton loading={savingS} onClick={saveStorLoc} disabled={!gate.canManageInventory()}>إضافة المكان</LoadingButton>
+          </div>
+          <div className="materials124-card-grid">
+            {storLocs.map((storage) => <article key={storage.id} className={!storage.active ? 'is-inactive' : ''}><span><InventoryGlyph kind="storage" /></span><div><strong>{storage.name}</strong><small>{storage.description || 'بدون وصف'}</small></div><button type="button" className={`materials124-state ${storage.active ? 'is-active' : 'is-inactive'}`} onClick={() => toggleStorActive(storage.id, storage.active)} disabled={!gate.canManageInventory()}>{storage.active ? 'مفعّل' : 'موقوف'}</button></article>)}
+          </div>
+        </section>
+      )}
+
+      {tab === 'zones' && (
+        <section className="materials124-management-card">
+          <div className="materials124-section-head"><div><span>تجهيز الأرض</span><h2>قطاعات الأرض</h2></div><span className="materials124-detail-icon"><InventoryGlyph kind="zone" /></span></div>
+          <div className="materials124-create-row is-zone">
+            <label><span>اسم القطاع</span><input value={zName} onChange={(e) => setZName(e.target.value)} placeholder="A1 / B2 ..." /></label>
+            <LoadingButton loading={savingZ} onClick={saveZone} disabled={!gate.canManageInventory()}>إضافة قطاع</LoadingButton>
+          </div>
+          <div className="materials124-card-grid">
+            {zones.map((zone) => <article key={zone.id} className={!zone.active ? 'is-inactive' : ''}><span><InventoryGlyph kind="zone" /></span><div><strong>{zone.name}</strong><small>قطاع أرض</small></div><button type="button" className={`materials124-state ${zone.active ? 'is-active' : 'is-inactive'}`} onClick={() => toggleZoneActive(zone.id, zone.active)} disabled={!gate.canManageInventory()}>{zone.active ? 'مفعّل' : 'موقوف'}</button></article>)}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

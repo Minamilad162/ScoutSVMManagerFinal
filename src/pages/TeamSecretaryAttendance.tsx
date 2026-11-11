@@ -15,6 +15,7 @@ import { SectionCard } from '../components/ui/SectionCard'
 import { EmptyState } from '../components/ui/EmptyState'
 import { InlineAlert } from '../components/ui/InlineAlert'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { clampDateToBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 
 type Team = { id: string; name: string }
 type Term = { id: string; name: string; year: number; start_date: string|null; end_date: string|null }
@@ -52,6 +53,7 @@ export default function TeamSecretaryAttendance() {
   const [counts, setCounts] = useState<Record<string, Counts>>({})
 
   const termMeta = useMemo(() => terms.find(t => t.id === termId) || null, [terms, termId])
+  const termBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
   const attendanceMetrics = useMemo(() => {
     const total = list.length
     const present = Object.values(checks).filter(Boolean).length
@@ -59,13 +61,13 @@ export default function TeamSecretaryAttendance() {
     return { total, present, absent }
   }, [checks, list])
 
-  useEffect(() => { init() }, [])
+  useEffect(() => { if (currentScoutYear?.id) void init() }, [currentScoutYear?.id])
   async function init() {
     setLoading(true)
     try {
       const tm = await fetchTerms()
       setTerms(tm)
-      if (tm.length) setTermId(tm[0].id)
+      setTermId(tm[0]?.id || '')
 
       if (isAdmin || isGlobalSec) {
         const ts = await fetchTeams()
@@ -82,7 +84,7 @@ export default function TeamSecretaryAttendance() {
       // تاريخ افتراضي (اليوم)
       const now = new Date(); const pad=(n:number)=>String(n).padStart(2,'0')
       const d = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`
-      setMeetingDate(d)
+      setMeetingDate(clampDateToBounds(d, getTermYearBounds(currentScoutYear)))
     } catch (e:any) {
       logError('TeamSecretaryAttendance.init', e)
       toast.error(getErrorMessage(e, 'تعذر التحميل'))
@@ -90,15 +92,18 @@ export default function TeamSecretaryAttendance() {
   }
 
   // ✅ تحميل تواريخ الترم المختار + دمج أي تواريخ اجتماعات محفوظة فعليًا
-  useEffect(() => { if (termId && teamId) loadTermDates(termId) }, [termId, teamId, terms])
+  useEffect(() => { if (termId && teamId && termBounds) void loadTermDates(termId); else setTermDates([]) }, [termId, teamId, terms, currentScoutYear?.id])
   async function loadTermDates(tid: string) {
     try {
       const term = terms.find(t => t.id === tid)
+      const bounds = getTermYearBounds(currentScoutYear, term)
+      if (!bounds) { setTermDates([]); return }
 
       const { data: baseDates, error: baseErr } = await supabase
         .from('term_meeting_dates')
         .select('id, meeting_date')
         .eq('term_id', tid)
+        .gte('meeting_date', bounds.start).lte('meeting_date', bounds.end)
         .order('meeting_date', { ascending: true })
       if (baseErr) throw baseErr
 
@@ -109,8 +114,7 @@ export default function TeamSecretaryAttendance() {
         .eq('mtype', 'meeting') as any
       if (currentScoutYear?.id) meetingsQuery = meetingsQuery.eq('scout_year_id', currentScoutYear.id)
 
-      if (term?.start_date) meetingsQuery = meetingsQuery.gte('meeting_date', term.start_date)
-      if (term?.end_date) meetingsQuery = meetingsQuery.lte('meeting_date', term.end_date)
+      meetingsQuery = meetingsQuery.gte('meeting_date', bounds.start).lte('meeting_date', bounds.end)
 
       const { data: existingMeetings, error: meetingsErr } = await meetingsQuery.order('meeting_date', { ascending: true })
       if (meetingsErr) throw meetingsErr
@@ -284,7 +288,7 @@ export default function TeamSecretaryAttendance() {
   async function saveAttendance() {
     setSaving(true)
     try {
-      if (!meetingDate) throw new Error('اختر تاريخ الاجتماع')
+      if (!inDateBounds(meetingDate, termBounds)) throw new Error('تاريخ الاجتماع خارج حدود الترم والسنة الكشفية')
       const { data: mrow, error: me } = await supabase
         .from('meetings')
         .upsert({ team_id: teamId, meeting_date: meetingDate, mtype: 'meeting' }, { onConflict: 'team_id,meeting_date,mtype' })
@@ -455,7 +459,7 @@ export default function TeamSecretaryAttendance() {
                     if (termDates.length){
                       setUseCustomDay(false)
                       const d = termDates[0].meeting_date
-                      setMeetingDate(d)
+                      setMeetingDate(clampDateToBounds(d, getTermYearBounds(currentScoutYear)))
                       loadMeetingAttendanceForDate(d)
                     }
                   }}

@@ -1,6 +1,7 @@
-import { supabase } from '../../lib/supabase'
+import { isScoutYearViewReadOnly, supabase } from '../../lib/supabase'
 import { safeWriteAuditLog } from '../audit/api'
 import { fetchCurrentMembers, fetchCurrentScoutYear, fetchTerms, type TermOption } from '../reference/api'
+import { filterSelectionsForScoutYear, filterTermsForScoutYear } from './yearScope'
 
 export type BestChefCandidate = {
   member_id: string
@@ -56,9 +57,9 @@ function resolveDisplayTerm(terms: TermOption[]) {
 }
 
 
-async function getSelectedHomeTermForCurrentYear() {
+async function getSelectedHomeTermForCurrentYear(expectedScoutYearId: string) {
   const scoutYear = await fetchCurrentScoutYear()
-  if (!scoutYear?.id) return null as TermOption | null
+  if (!scoutYear?.id || scoutYear.id !== expectedScoutYearId) return null as TermOption | null
 
   const { data, error } = await supabase
     .from('terms')
@@ -73,8 +74,8 @@ async function getSelectedHomeTermForCurrentYear() {
   return (data || null) as (TermOption & { show_best_chefs_on_home?: boolean }) | null
 }
 
-export async function getBestChefsHomeTermId() {
-  const row = await getSelectedHomeTermForCurrentYear()
+export async function getBestChefsHomeTermId(scoutYearId: string) {
+  const row = await getSelectedHomeTermForCurrentYear(scoutYearId)
   return row?.id ?? null
 }
 
@@ -84,8 +85,10 @@ export async function setBestChefsHomeTerm(payload: {
 }) {
   const scoutYear = await fetchCurrentScoutYear()
   if (!scoutYear?.id) throw new Error('لا توجد سنة كشفية حالية مفعلة')
+  if (isScoutYearViewReadOnly()) throw new Error('لا يمكن تعديل اختيارات سنة كشفية مؤرشفة')
+  if (payload.term.scout_year_id !== scoutYear.id) throw new Error('الترم المختار لا ينتمي إلى السنة الكشفية المعروضة')
 
-  const beforeSelected = await getSelectedHomeTermForCurrentYear()
+  const beforeSelected = await getSelectedHomeTermForCurrentYear(scoutYear.id)
 
   const { error: clearError } = await supabase
     .from('terms')
@@ -132,18 +135,19 @@ export async function setBestChefsHomeTerm(payload: {
   return payload.term.id
 }
 
-async function listSelectionsForTerms(termIds: string[]) {
-  if (!termIds.length) return [] as BestChefSelection[]
+async function listSelectionsForTerms(termIds: string[], scoutYearId: string) {
+  if (!termIds.length || !scoutYearId) return [] as BestChefSelection[]
 
   const { data, error } = await supabase
     .from('v_term_best_chefs_readable')
     .select('id,scout_year_id,term_id,term_name,member_id,full_name,team_id,team_name,avatar_url,sort_order,note,selected_by,created_at,updated_at')
+    .eq('scout_year_id', scoutYearId)
     .in('term_id', termIds)
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true })
 
   if (error) throw error
-  return (data || []) as BestChefSelection[]
+  return filterSelectionsForScoutYear((data || []) as BestChefSelection[], scoutYearId, termIds)
 }
 
 export async function listBestChefTermsForCurrentYear() {
@@ -169,8 +173,8 @@ export async function listBestChefCandidatesForCurrentYear() {
     })
 }
 
-export async function listBestChefsForTerm(termId: string) {
-  const items = await listSelectionsForTerms([termId])
+export async function listBestChefsForTerm(termId: string, scoutYearId: string) {
+  const items = await listSelectionsForTerms([termId], scoutYearId)
   return items.filter((item) => item.term_id === termId)
 }
 
@@ -181,9 +185,16 @@ export async function saveBestChefsForTerm(payload: {
 }) {
   const scoutYear = await fetchCurrentScoutYear()
   if (!scoutYear?.id) throw new Error('لا توجد سنة كشفية حالية مفعلة')
+  if (isScoutYearViewReadOnly()) throw new Error('لا يمكن تعديل اختيارات سنة كشفية مؤرشفة')
+  if (payload.term.scout_year_id !== scoutYear.id) throw new Error('الترم المختار لا ينتمي إلى السنة الكشفية المعروضة')
 
+  const candidates = await listBestChefCandidatesForCurrentYear()
+  const candidateIds = new Set(candidates.map((item) => item.member_id))
   const uniqueMemberIds = Array.from(new Set(payload.memberIds.filter(Boolean)))
-  const current = await listBestChefsForTerm(payload.term.id)
+  if (uniqueMemberIds.some((id) => !candidateIds.has(id))) {
+    throw new Error('الاختيارات تحتوي على قائد غير مفعّل في السنة الكشفية الحالية')
+  }
+  const current = await listBestChefsForTerm(payload.term.id, scoutYear.id)
   const currentIds = current.map((item) => item.member_id)
 
   const toDelete = current.filter((item) => !uniqueMemberIds.includes(item.member_id)).map((item) => item.id)
@@ -221,7 +232,6 @@ export async function saveBestChefsForTerm(payload: {
     if (error) throw error
   }
 
-  const candidates = await listBestChefCandidatesForCurrentYear()
   const candidateMap = new Map(candidates.map((item) => [item.member_id, item]))
   const afterItems = uniqueMemberIds.map((memberId, index) => {
     const item = candidateMap.get(memberId)
@@ -257,7 +267,7 @@ export async function saveBestChefsForTerm(payload: {
     },
   })
 
-  return listBestChefsForTerm(payload.term.id)
+  return listBestChefsForTerm(payload.term.id, scoutYear.id)
 }
 
 
@@ -266,11 +276,12 @@ export type BestChefGallerySection = {
   items: BestChefSelection[]
 }
 
-export async function fetchBestChefsGallery() {
-  const terms = await fetchTerms()
+export async function fetchBestChefsGallery(scoutYearId: string | null) {
+  if (!scoutYearId) return [] as BestChefGallerySection[]
+  const terms = filterTermsForScoutYear(await fetchTerms(), scoutYearId)
   if (!terms.length) return [] as BestChefGallerySection[]
 
-  const items = await listSelectionsForTerms(terms.map((term) => term.id))
+  const items = await listSelectionsForTerms(terms.map((term) => term.id), scoutYearId)
   const grouped = new Map<string, BestChefSelection[]>()
 
   for (const item of items) {
@@ -288,11 +299,12 @@ export async function fetchBestChefsGallery() {
   }))
 }
 
-export async function fetchBestChefsHomeShowcase() {
-  const terms = await fetchTerms()
+export async function fetchBestChefsHomeShowcase(scoutYearId: string | null) {
+  if (!scoutYearId) return null
+  const terms = filterTermsForScoutYear(await fetchTerms(), scoutYearId)
   if (!terms.length) return null
 
-  const allItems = await listSelectionsForTerms(terms.map((term) => term.id))
+  const allItems = await listSelectionsForTerms(terms.map((term) => term.id), scoutYearId)
   if (!allItems.length) return null
 
   const grouped = new Map<string, BestChefSelection[]>()
@@ -305,7 +317,7 @@ export async function fetchBestChefsHomeShowcase() {
   const termsWithItems = terms.filter((term) => (grouped.get(term.id) || []).length > 0)
   if (!termsWithItems.length) return null
 
-  const selectedHomeTerm = await getSelectedHomeTermForCurrentYear()
+  const selectedHomeTerm = await getSelectedHomeTermForCurrentYear(scoutYearId)
   const selectedWithItems = selectedHomeTerm ? termsWithItems.find((term) => term.id === selectedHomeTerm.id) || null : null
   const term = selectedWithItems || resolveDisplayTerm(termsWithItems)
   if (!term) return null

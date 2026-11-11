@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
+import { getScoutYearBounds } from '../lib/scoutYearScope'
 import { EmptyState } from '../components/ui/EmptyState'
 import { InlineAlert } from '../components/ui/InlineAlert'
 import { MetricCard } from '../components/ui/MetricCard'
@@ -64,16 +65,6 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
 
-function startOfYearISO() {
-  const d = new Date()
-  return new Date(d.getFullYear(), 0, 1).toISOString().slice(0, 10)
-}
-
-function endOfYearISO() {
-  const d = new Date()
-  return new Date(d.getFullYear(), 11, 31).toISOString().slice(0, 10)
-}
-
 function statusLabel(status: CampInstallmentSummaryRow['status']) {
   if (status === 'draft') return 'مسودة'
   if (status === 'open') return 'مفتوح'
@@ -104,8 +95,14 @@ export default function CampInstallmentsList() {
 
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [fromDate, setFromDate] = useState(startOfYearISO())
-  const [toDate, setToDate] = useState(endOfYearISO())
+  const yearBounds = getScoutYearBounds(currentScoutYear)
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+
+  useEffect(() => {
+    setFromDate(yearBounds?.start || '')
+    setToDate(yearBounds?.end || '')
+  }, [currentScoutYear?.id, currentScoutYear?.start_date, currentScoutYear?.end_date])
 
   const hasRole = useCallback(
     (slug: string) => (roles || []).some((r) => r.role_slug === slug),
@@ -130,7 +127,7 @@ export default function CampInstallmentsList() {
 
     try {
       const currentScoutYearId = await fetchCurrentScoutYearId()
-      if (!currentScoutYearId) {
+      if (!currentScoutYearId || !yearBounds) {
         setRows([])
         return
       }
@@ -143,8 +140,8 @@ export default function CampInstallmentsList() {
 
       if (statusFilter) pricingReq = pricingReq.eq('status', statusFilter)
       if (query.trim()) pricingReq = pricingReq.ilike('title', `%${query.trim()}%`)
-      if (fromDate) pricingReq = pricingReq.gte('created_at', `${fromDate}T00:00:00`)
-      if (toDate) pricingReq = pricingReq.lte('created_at', `${toDate}T23:59:59`)
+      pricingReq = pricingReq.gte('created_at', `${fromDate && fromDate > yearBounds.start ? fromDate : yearBounds.start}T00:00:00`)
+      pricingReq = pricingReq.lte('created_at', `${toDate && toDate < yearBounds.end ? toDate : yearBounds.end}T23:59:59`)
 
       const { data: pricingRows, error: pricingError } = await pricingReq
       if (pricingError) throw pricingError
@@ -300,6 +297,8 @@ export default function CampInstallmentsList() {
             </label>
             <input
               type="date"
+              min={yearBounds?.start}
+              max={yearBounds?.end}
               value={fromDate}
               onChange={(e) => setFromDate(e.target.value)}
               className="w-full rounded-2xl border border-slate-300 px-3 py-2.5 outline-none focus:border-indigo-500"
@@ -312,6 +311,8 @@ export default function CampInstallmentsList() {
             </label>
             <input
               type="date"
+              min={yearBounds?.start}
+              max={yearBounds?.end}
               value={toDate}
               onChange={(e) => setToDate(e.target.value)}
               className="w-full rounded-2xl border border-slate-300 px-3 py-2.5 outline-none focus:border-indigo-500"
@@ -333,8 +334,8 @@ export default function CampInstallmentsList() {
             onClick={() => {
               setQuery('')
               setStatusFilter('')
-              setFromDate(startOfYearISO())
-              setToDate(endOfYearISO())
+              setFromDate(yearBounds?.start || '')
+              setToDate(yearBounds?.end || '')
             }}
             className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium hover:bg-slate-50"
           >

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { scoutYearFrom, supabase } from '../lib/supabase'
+import { fetchTerms } from '../features/reference/api'
+import { getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
 
@@ -35,18 +37,20 @@ export default function Admin() {
   const [rolesList, setRolesList] = useState<Role[]>([])
   const [terms, setTerms] = useState<Term[]>([])
 
-  useEffect(() => { loadBasic() }, [])
+  useEffect(() => { if (currentScoutYear?.id) void loadBasic(); else setTerms([]) }, [currentScoutYear?.id])
   async function loadBasic() {
     const [t, r, rl, tm] = await Promise.all([
       supabase.from('teams').select('id, name').order('name', { ascending: true }),
       supabase.from('ranks').select('id, rank_label, rank_slug').order('id'),
       supabase.from('roles').select('id, role_label, role_slug').order('id'),
-      scoutYearFrom('v_terms_with_scout_year', 'v_terms_context').select('id, name, year, start_date, end_date, scout_year_id').eq('is_current', true).order('year', { ascending: false }).order('name', { ascending: true }),
+      fetchTerms(),
     ])
     if (!t.error) setTeams(t.data ?? [])
     if (!r.error) setRanks(r.data ?? [])
     if (!rl.error) setRolesList(rl.data ?? [])
-    if (!tm.error) setTerms(tm.data ?? [])
+    setTerms(tm)
+    setSelTerm(tm[0]?.id || '')
+    setStatsAbsence([])
   }
 
   // ========== Members ==========
@@ -67,10 +71,9 @@ export default function Admin() {
   const [mBirth, setMBirth] = useState('')
   const [mAuth, setMAuth] = useState('')
 
-  useEffect(() => { loadMembers() }, [])
+  useEffect(() => { if (currentScoutYear?.id) void loadMembers(); else setMembers([]) }, [currentScoutYear?.id])
   async function loadMembers() {
-    const { data, error } = await supabase
-      .from('members')
+    const { data, error } = await scoutYearFrom('v_members_current', 'v_members_context')
       .select('id, full_name, team_id, rank_id, is_equipier, personal_phone, guardian_name, guardian_phone, birth_date, auth_user_id')
       .order('full_name', { ascending: true })
     if (error) { setErr(error.message); return }
@@ -204,7 +207,7 @@ export default function Admin() {
   async function loadMemberRoles(memberId: string) {
     const mem = members.find(m => m.id === memberId)
     if (!mem?.auth_user_id) { setMemberRoles([]); return }
-    const { data, error } = await supabase.from('user_roles_view').select('user_id, role_slug, team_id').eq('user_id', mem.auth_user_id)
+    const { data, error } = await scoutYearFrom('v_user_roles_current', 'v_user_roles_context').select('user_id, role_slug, team_id').eq('user_id', mem.auth_user_id)
     if (!error) setMemberRoles(data ?? [])
   }
   async function assignRole() {
@@ -236,7 +239,9 @@ export default function Admin() {
   async function saveTerm() {
     setErr(null); setMsg(null)
     if (!termName) { setErr('اسم الترم مطلوب'); return }
-    const payload: any = { name: termName, year: Number(termYear), start_date: termStart || null, end_date: termEnd || null, scout_year_id: currentScoutYear?.id ?? null }
+    const yearBounds = getScoutYearBounds(currentScoutYear)
+    if (!yearBounds || !termStart || !termEnd || !inDateBounds(termStart, yearBounds) || !inDateBounds(termEnd, yearBounds) || termStart > termEnd) { setErr('الترم لازم يكون بالكامل داخل حدود السنة الكشفية المختارة'); return }
+    const payload: any = { name: termName, year: Number(termYear), start_date: termStart, end_date: termEnd, scout_year_id: currentScoutYear?.id ?? null }
     if (termEditId) {
       const { error } = await supabase.from('terms').update(payload).eq('id', termEditId)
       if (error) { setErr(error.message); return }
@@ -246,9 +251,8 @@ export default function Admin() {
       if (error) { setErr(error.message); return }
       setMsg('تم إضافة الترم')
     }
-    setTermEditId(null); setTermName(''); setTermYear(new Date().getFullYear()); setTermStart(''); setTermEnd('')
-    const { data } = await scoutYearFrom('v_terms_with_scout_year', 'v_terms_context').select('id, name, year, start_date, end_date, scout_year_id').eq('is_current', true).order('year', { ascending: false }).order('name', { ascending: true })
-    setTerms(data ?? [])
+    setTermEditId(null); setTermName(''); setTermYear(Number(currentScoutYear?.start_date?.slice(0,4) || new Date().getFullYear())); setTermStart(''); setTermEnd('')
+    setTerms(await fetchTerms())
   }
 
   // ====== إدارة تواريخ الاجتماعات للترم ======
@@ -282,7 +286,7 @@ export default function Admin() {
     if (!manageTerm.start_date || !manageTerm.end_date){
       setErr('حدد تاريخي بداية ونهاية الترم أولاً'); return
     }
-    if (!withinRange(newTermDate, manageTerm.start_date, manageTerm.end_date)){
+    if (!inDateBounds(newTermDate, getTermYearBounds(currentScoutYear, manageTerm)) || !withinRange(newTermDate, manageTerm.start_date, manageTerm.end_date)){
       setErr('التاريخ خارج حدود الترم'); return
     }
     if (termDates.some(x => x.meeting_date === newTermDate)){
@@ -391,19 +395,71 @@ export default function Admin() {
   const [statsEval, setStatsEval] = useState<any[]>([])
   const [selTerm, setSelTerm] = useState<string>('')
 
-  useEffect(() => { loadStats(); }, [])
+  useEffect(() => { if (currentScoutYear?.id) void loadStats(); else { setStatsRank([]); setStatsFinance([]); setStatsEval([]) } }, [currentScoutYear?.id])
   useEffect(() => { if (terms.length && !selTerm) setSelTerm(terms[0].id) }, [terms])
   useEffect(() => { if (selTerm) loadAbsenceForTerm(selTerm) }, [selTerm])
 
   async function loadStats() {
-    const [v1, v2, v4] = await Promise.all([
-      supabase.from('v_rank_counts_by_team').select('*'),
-      supabase.from('v_finance_summary').select('*'),
-      supabase.from('v_eval_coverage').select('*'),
+    // Legacy global ranking/coverage views are NOT season-aware. Aggregate
+    // from selected-year member assignments and matching term evaluations.
+    const [membersResult, scopedTerms] = await Promise.all([
+      scoutYearFrom('v_members_current', 'v_members_context')
+        .select('id,team_id,team_name,rank_id,rank_label,is_equipier').eq('is_active', true),
+      fetchTerms(),
     ])
-    if (!v1.error) setStatsRank(v1.data ?? [])
-    if (!v2.error) setStatsFinance(v2.data ?? [])
-    if (!v4.error) setStatsEval(v4.data ?? [])
+    if (membersResult.error) { setStatsRank([]); setStatsEval([]); setStatsFinance([]); return }
+    const activeMembers = (membersResult.data || []) as any[]
+    const rankBuckets = new Map<string, { team_name: string; rank_label: string; member_count: number }>()
+    for (const member of activeMembers) {
+      const key = `${member.team_id || ''}:${member.rank_id || ''}`
+      const bucket = rankBuckets.get(key) || { team_name: member.team_name || '—', rank_label: member.rank_label || '—', member_count: 0 }
+      bucket.member_count += 1
+      rankBuckets.set(key, bucket)
+    }
+    setStatsRank(Array.from(rankBuckets.values()).sort((a,b) => a.team_name.localeCompare(b.team_name, 'ar')))
+    const termIds = scopedTerms.map(t => t.id)
+    if (termIds.length) {
+      const { data: evaluations } = await supabase.from('evaluations')
+        .select('term_id,team_id,evaluatee_member_id').in('term_id', termIds)
+      const chefs = activeMembers.filter(m => !m.is_equipier && m.team_id)
+      const teamIds = Array.from(new Set(chefs.map(m => String(m.team_id))))
+      const teamNames = new Map(chefs.map(m => [String(m.team_id), String(m.team_name || '—')]))
+      const evalIds = new Set((evaluations || []).map(e => `${e.team_id}:${e.term_id}:${e.evaluatee_member_id}`))
+      setStatsEval(scopedTerms.flatMap(term => teamIds.map(teamId => {
+        const teamChefs = chefs.filter(m => m.team_id === teamId)
+        const evaluated = teamChefs.filter(m => evalIds.has(`${teamId}:${term.id}:${m.id}`)).length
+        return { year: term.year, term_name: term.name, team_name: teamNames.get(teamId) || '—',
+          total_chefs: teamChefs.length, evaluated_chefs: evaluated, pending_chefs: Math.max(0, teamChefs.length-evaluated) }
+      })))
+    } else setStatsEval([])
+    const bounds = getScoutYearBounds(currentScoutYear)
+    const ids = scopedTerms.map(t => t.id)
+    if (!bounds || !ids.length) { setStatsFinance([]); return }
+    const [budgetsResult, expensesResult, teamsResult] = await Promise.all([
+      supabase.from('v_team_budgets_effective').select('team_id,term_id,amount_total').in('term_id', ids).is('soft_deleted_at', null),
+      supabase.from('expenses').select('team_id,term_id,total,expense_date').in('term_id', ids).gte('expense_date', bounds.start).lte('expense_date', bounds.end).is('soft_deleted_at', null),
+      supabase.from('teams').select('id,name'),
+    ])
+    if (budgetsResult.error || expensesResult.error || teamsResult.error) { setStatsFinance([]); return }
+    const names = new Map((teamsResult.data || []).map(t => [t.id, t.name]))
+    const termsById = new Map(scopedTerms.map(t => [t.id, t]))
+    const spentByKey = new Map<string, number>()
+    for (const expense of expensesResult.data || []) {
+      const term = termsById.get(expense.term_id)
+      if (!term || !inDateBounds(expense.expense_date, getTermYearBounds(currentScoutYear, term))) continue
+      const key = `${expense.team_id}:${expense.term_id}`
+      spentByKey.set(key, (spentByKey.get(key) || 0) + Number(expense.total || 0))
+    }
+    setStatsFinance((budgetsResult.data || []).map(budget => {
+      const term = termsById.get(budget.term_id)
+      const amount = Number(budget.amount_total || 0)
+      const spent = spentByKey.get(`${budget.team_id}:${budget.term_id}`) || 0
+      return {
+        year: term?.year || '', term_name: term?.name || '—', team_name: names.get(budget.team_id) || '—',
+        budget_total: amount, spent, remaining: amount - spent,
+        pct_remaining: amount > 0 ? Math.round(100 * (amount - spent) / amount) : 0,
+      }
+    }))
   }
   async function loadAbsenceForTerm(termId: string) {
     const { data, error } = await supabase.from('v_chefs_high_absence').select('*').eq('term_id', termId)

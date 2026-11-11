@@ -397,17 +397,18 @@ export default function FieldReservationsTeam() {
 
   // ===== UI =====
   return (
-    <div className="space-y-6 p-4 md:p-6">
+    <div className="teamops127-page fieldreservations127-page space-y-6 p-4 md:p-6">
       <PageLoader visible={loading} text="جاري التحميل..." />
 
       <PageHero
+        className="teamops127-hero fieldreservations127-hero"
         title="حجوزات قطاعات الأرض"
         eyebrow={teamName ? `الفريق: ${teamName}` : 'إدارة الحجوزات'}
         description="حجز قطاع أرض داخل تواريخ الترم المحددة، مع عرض خريطة الأرض وحجوزات الفريق وجميع الفرق في اليوم المختار."
         badge={!isAdmin ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">استخدام فريقي</span> : undefined}
       />
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="teamops127-metrics grid gap-3 md:grid-cols-4">
         <MetricCard label="قطاعات متاحة" value={zones.length} hint="في الأرض الحالية" accent="indigo" />
         <MetricCard label="حجوزات فريقي" value={rows.length} hint="في اليوم المختار" accent="emerald" />
         <MetricCard label="حجوزات كل الفرق" value={dayRows.length} hint="في اليوم المختار" accent="sky" />
@@ -415,7 +416,7 @@ export default function FieldReservationsTeam() {
       </div>
 
       {/* الخرائط دائمًا */}
-      <SectionCard title="خريطة الأرض" description="راجع القطاعات قبل إنشاء الحجز، خاصة في الأيام التي تحتوي على حجوزات متعددة.">
+      <SectionCard className="teamops127-map-panel" title="خريطة الأرض" description="راجع القطاعات قبل إنشاء الحجز، خاصة في الأيام التي تحتوي على حجوزات متعددة.">
         <FieldMaps className="mb-1" sticky height="h-72 md:h-[28rem]" />
       </SectionCard>
 
@@ -445,7 +446,7 @@ export default function FieldReservationsTeam() {
         </SectionCard>
       )}
 
-      <SectionCard title="إضافة حجز جديد" description="اختر الترم، التاريخ، القطاع، ثم وقت البداية والنهاية قبل تأكيد الحجز.">
+      <SectionCard className="teamops127-primary-panel" title="إضافة حجز جديد" description="اختر الترم، التاريخ، القطاع، ثم وقت البداية والنهاية قبل تأكيد الحجز.">
       <div className={`${(!isAdmin && !gate.canBookReservations(teamId)) ? 'opacity-60 pointer-events-none' : ''}`}>
         <div className="grid md:grid-cols-6 gap-2 items-end">
           {/* اختيار نوع اليوم */}
@@ -529,7 +530,7 @@ export default function FieldReservationsTeam() {
       </SectionCard>
 
       {/* حجوزات الفريق (مصفاة على التاريخ المختار) */}
-      <SectionCard title={`حجوزات الفريق — ${meetingDate || 'بدون تاريخ'}`} description="كل الحجوزات الحالية لفريقك في اليوم المختار، مع إمكانية الإلغاء السريع.">
+      <SectionCard className="teamops127-list-panel" title={`حجوزات الفريق — ${meetingDate || 'بدون تاريخ'}`} description="كل الحجوزات الحالية لفريقك في اليوم المختار، مع إمكانية الإلغاء السريع.">
         <div className="flex items-center justify-between">
           {teamDayLoading && <span className="text-sm text-gray-500">جاري التحميل…</span>}
         </div>
@@ -565,7 +566,7 @@ export default function FieldReservationsTeam() {
       </SectionCard>
 
       {/* ===== الحجوزات في التاريخ المختار (لكل الفرق) ===== */}
-      <SectionCard title={`حجوزات كل الفرق — ${meetingDate || 'بدون تاريخ'}`} description="راجع هذا الجدول قبل إنشاء حجز جديد لتجنب التعارضات على نفس القطاع أو الفترة.">
+      <SectionCard className="teamops127-list-panel" title={`حجوزات كل الفرق — ${meetingDate || 'بدون تاريخ'}`} description="راجع هذا الجدول قبل إنشاء حجز جديد لتجنب التعارضات على نفس القطاع أو الفترة.">
         <div className="flex items-center justify-between">
           {dayLoading && <span className="text-sm text-gray-500">جاري التحميل…</span>}
         </div>
