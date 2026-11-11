@@ -10,6 +10,7 @@ import { useScoutYear } from '../components/ScoutYearProvider'
 import { MetricCard } from '../components/ui/MetricCard'
 import { PageHero } from '../components/ui/PageHero'
 import { SectionCard } from '../components/ui/SectionCard'
+import { isMissingBudgetConfirmationSchema, isMissingEffectiveBudgetView } from '../features/finance/budgetSchema'
 
 type Team = { id: string; name: string }
 type Term = { id: string; name: string; year: number; scout_year_id?: string | null; start_date?: string | null; end_date?: string | null }
@@ -32,6 +33,7 @@ export default function AdminFinance() {
   const [budget, setBudget] = useState<number | null>(null)
   const [budgetRecord, setBudgetRecord] = useState<BudgetRecord | null>(null)
   const [budgetAudit, setBudgetAudit] = useState<BudgetAudit[]>([])
+  const [budgetSchemaReady, setBudgetSchemaReady] = useState(true)
   const [budgetDraft, setBudgetDraft] = useState<string>('')
   const [spent, setSpent] = useState(0)
 
@@ -54,7 +56,7 @@ export default function AdminFinance() {
     setLoading(true)
     try {
       const [tm, ts] = await Promise.all([fetchTerms(), fetchTeams()])
-      setBudget(null); setBudgetRecord(null); setBudgetAudit([]); setBudgetDraft(''); setSpent(0); setTermId('')
+      setBudget(null); setBudgetRecord(null); setBudgetAudit([]); setBudgetDraft(''); setSpent(0); setTermId(''); setBudgetSchemaReady(true)
       setTerms(tm)
       setTeams(ts)
       if (ts.length) setTeamId(ts[0].id)
@@ -79,13 +81,33 @@ export default function AdminFinance() {
         supabase.from('team_budgets').select('id,amount_total,created_at,created_by,confirmed_at,confirmed_by,scout_year_id').eq('team_id', teamId).eq('term_id', termId).eq('scout_year_id', currentScoutYear!.id).is('soft_deleted_at', null).maybeSingle(),
         supabase.from('expenses').select('total').eq('team_id', teamId).eq('term_id', termId).gte('expense_date', termBounds.start).lte('expense_date', termBounds.end).is('soft_deleted_at', null),
       ])
-      if (bErr) throw bErr
       if (eErr) throw eErr
-      const record = (bRow || null) as BudgetRecord | null
+      let confirmationSchemaReady = true
+      let record: BudgetRecord | null = (bRow || null) as BudgetRecord | null
+      if (isMissingBudgetConfirmationSchema(bErr)) {
+        // The old schema has no confirmed_at (and may also lack scout_year_id).
+        // Scope the legacy read to the chosen term and team; do not approve its amount.
+        confirmationSchemaReady = false
+        const { data: legacy, error: legacyError } = await supabase.from('team_budgets')
+          .select('id,amount_total,created_at,created_by')
+          .eq('team_id', teamId).eq('term_id', termId)
+          .is('soft_deleted_at', null).maybeSingle()
+        if (legacyError) throw legacyError
+        record = legacy ? { ...legacy, confirmed_at: null, confirmed_by: null, scout_year_id: null } : null
+      } else if (bErr) {
+        throw bErr
+      }
+      if (confirmationSchemaReady) {
+        // Columns alone are insufficient: SQL 23 also creates the effective-budget view.
+        const { error: viewError } = await supabase.from('v_team_budgets_effective').select('id').limit(1)
+        if (isMissingEffectiveBudgetView(viewError)) confirmationSchemaReady = false
+        else if (viewError) throw viewError
+      }
+      setBudgetSchemaReady(confirmationSchemaReady)
       setBudgetRecord(record)
       setBudgetDraft(record ? String(record.amount_total) : '')
-      // The real current year's existing values need explicit Super Admin confirmation.
-      setBudget(record && (!currentScoutYear?.is_current || record.confirmed_at) ? Number(record.amount_total) : null)
+      // No confirmation column means there is no trustworthy approval record.
+      setBudget(confirmationSchemaReady && record && (!currentScoutYear?.is_current || record.confirmed_at) ? Number(record.amount_total) : null)
       setBudgetAudit([])
       if (record?.id) {
         const { data: auditData } = await supabase.from('v_audit_log_readable')
@@ -112,6 +134,7 @@ export default function AdminFinance() {
     }
 
     if (isReadOnlyView) return toast.error('السنوات السابقة للعرض فقط؛ لا يمكن تعديل ميزانيتها')
+    if (!budgetSchemaReady) return toast.error('لا يمكن اعتماد الميزانية قبل تطبيق تحديث قاعدة البيانات SQL 23')
     if (!budgetDraft.trim()) return toast.error('اكتب قيمة الميزانية أولًا')
     const val = Number(budgetDraft)
     if (!isFinite(val) || val < 0) return toast.error('قيمة الميزانية غير صالحة')
@@ -151,6 +174,13 @@ export default function AdminFinance() {
         badge={<span className="finance123-hero-badge">Finance Admin</span>}
       />
 
+      {!budgetSchemaReady && (
+        <div role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" dir="rtl">
+          <strong>⚠️ نظام اعتماد الميزانيات غير متاح في قاعدة البيانات الحالية</strong>
+          <p className="mt-1">تعذر العثور على أعمدة أو عرض اعتماد الميزانية في قاعدة البيانات أو في مخطط الـAPI (SQL 23). يمكنك مراجعة المصروفات والسجلات السابقة، لكن لن نحتسب أو نعتمد أي ميزانية قديمة تلقائيًا. افحص مخطط قاعدة ScoutSVM وسجل الـMigrations، ثم نفّذ التحديث الناقص فقط وأعد تحميل الصفحة.</p>
+        </div>
+      )}
+
       <div className="finance123-kpis grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="الميزانية الحالية" value={budget !== null ? egp(budget) : '—'} hint={selectedTeam?.name || 'اختر الفريق'} accent="navy" />
         <MetricCard label="المصروف" value={egp(spent)} hint={selectedTerm ? `${selectedTerm.year} — ${selectedTerm.name}` : '—'} accent="rose" />
@@ -163,8 +193,8 @@ export default function AdminFinance() {
           <div className="finance123-form-grid">
             <label className="finance123-field"><span>الفريق</span><select value={teamId} onChange={(e) => setTeamId(e.target.value)}>{teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
             <label className="finance123-field"><span>الترم</span><select value={termId} onChange={(e) => setTermId(e.target.value)}>{terms.map((term) => <option key={term.id} value={term.id}>{term.year} — {term.name}</option>)}</select></label>
-            <label className="finance123-field finance123-budget-input"><span>قيمة الميزانية (EGP)</span><input id="budgetInput" type="number" min={0} step="0.01" value={budgetDraft} placeholder="لم تُحدّد الميزانية" disabled={isReadOnlyView || !termBounds} onChange={(event) => setBudgetDraft(event.target.value)} /></label>
-            <LoadingButton className="finance123-save" loading={saving} disabled={isReadOnlyView || !termBounds} onClick={saveBudget}>{budgetRecord?.confirmed_at ? 'تحديث الميزانية' : 'حفظ واعتماد الميزانية'}</LoadingButton>
+            <label className="finance123-field finance123-budget-input"><span>قيمة الميزانية (EGP)</span><input id="budgetInput" type="number" min={0} step="0.01" value={budgetDraft} placeholder="لم تُحدّد الميزانية" disabled={isReadOnlyView || !termBounds || !budgetSchemaReady} onChange={(event) => setBudgetDraft(event.target.value)} /></label>
+            <LoadingButton className="finance123-save" loading={saving} disabled={isReadOnlyView || !termBounds || !budgetSchemaReady} onClick={saveBudget}>{budgetRecord?.confirmed_at ? 'تحديث الميزانية' : 'حفظ واعتماد الميزانية'}</LoadingButton>
           </div>
           {budgetRecord && (
             <div className={`mt-4 rounded-xl border p-3 text-sm ${!budgetRecord.confirmed_at && currentScoutYear?.is_current ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
