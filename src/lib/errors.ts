@@ -12,7 +12,7 @@ function isStructuredErrorLike(error: unknown): error is StructuredErrorLike {
   return typeof error === 'object' && error !== null && !(error instanceof Error)
 }
 
-export function getErrorMessage(error: ErrorLike, fallback = 'حدث خطأ غير متوقع') {
+export function getErrorMessage(error: unknown, fallback = 'حدث خطأ غير متوقع') {
   if (!error) return fallback
   if (typeof error === 'string') return error
 

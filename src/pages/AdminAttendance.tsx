@@ -364,6 +364,7 @@ export default function AdminAttendance() {
         for (const tid of teamIds) {
           const teamMeetingPayload: any = { team_id: tid, meeting_date: writeDate, mtype: writeType }
           if (currentScoutYear?.id) teamMeetingPayload.scout_year_id = currentScoutYear.id
+          const writeTermId = terms.find(term => (!term.start_date || writeDate >= term.start_date) && (!term.end_date || writeDate <= term.end_date))?.id
           if (writeTermId) teamMeetingPayload.term_id = writeTermId
           const { data: mrow, error: me } = await supabase
             .from('meetings')

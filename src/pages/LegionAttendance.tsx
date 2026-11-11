@@ -389,7 +389,7 @@ export default function LegionAttendance() {
       return {
         member_id: m.id,
         name: m.full_name,
-        rank: m.rank?.rank_label || (m.is_equipier ? 'Equipier' : '—'),
+        rank: m.rank_label || (m.is_equipier ? 'Equipier' : '—'),
         present: s.present,
         excused: s.excused,
         unexcused: s.unexcused,
@@ -769,7 +769,7 @@ export default function LegionAttendance() {
                   return (
                     <tr key={m.id} className="border-t align-top">
                       <td className="p-2">{m.full_name}</td>
-                      <td className="p-2">{m.rank?.rank_label || (m.is_equipier ? 'Equipier' : '—')}</td>
+                      <td className="p-2">{m.rank_label || (m.is_equipier ? 'Equipier' : '—')}</td>
                       <td className="p-2 text-center">
                         <input type="radio" name={`att-${m.id}`} checked={present} onChange={()=>setPresent(m.id, true)} />
                       </td>

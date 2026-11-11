@@ -17,6 +17,7 @@ export type CurrentScoutYear = {
   end_date: string
   status: 'draft' | 'active' | 'archived' | 'cancelled'
   is_current: boolean
+  notes?: string | null
 }
 export type CurrentUserContext = {
   member_id: string | null

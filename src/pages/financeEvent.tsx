@@ -185,7 +185,7 @@ export default function FinanceEvent() {
       setSelectedId('')
       setExpenses([])
       setBudgets([])
-    } else if (!cleaned.some(ev => ev.id === selectedId)) {
+    } else if (!cleaned.some((ev: EventRow) => ev.id === selectedId)) {
       setSelectedId(cleaned[0].id)
     }
   }

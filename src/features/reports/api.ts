@@ -333,8 +333,8 @@ export async function fetchReportCenterData(options: {
       .eq('team_id', teamId)
       .in('evaluatee_member_id', eligibleMemberIds)
 
-    if (filteredTermIds.length) evalReq = evalReq.in('term_id', filteredTermIds)
-    else if (allowedTermIds.length) evalReq = evalReq.in('term_id', allowedTermIds)
+    // An empty selected Scout Year/term set must match no evaluations.
+    evalReq = evalReq.in('term_id', scopedIds)
 
     const { data: evaluationRowsRaw, error: evaluationsError } = await evalReq
     if (evaluationsError) throw evaluationsError

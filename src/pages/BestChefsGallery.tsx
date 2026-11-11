@@ -74,7 +74,7 @@ export default function BestChefsGallery() {
 
   const totalSelected = sections.reduce((sum, section) => sum + section.items.length, 0)
 
-  if (loading) return <PageLoader message="جاري تحميل أفضل الـ chefs..." />
+  if (loading) return <PageLoader visible text="جاري تحميل أفضل الـ chefs..." />
 
   return (
     <div className="space-y-6">
