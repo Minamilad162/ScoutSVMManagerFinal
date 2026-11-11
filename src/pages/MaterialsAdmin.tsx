@@ -7,6 +7,9 @@ import { useRoleGate } from '../hooks/useRoleGate'
 import { InlineAlert } from '../components/ui/InlineAlert'
 import { EmptyState } from '../components/ui/EmptyState'
 import scoutBackpack from '../assets/scout-theme/scout-backpack.webp'
+import '../features/materialImages/materialImages.css'
+import { loadMaterialImageCatalog, materialPhotoUrl, removeMaterialPhoto, saveMaterialPhoto } from '../features/materialImages/api'
+import { validateMaterialImage } from '../features/materialImages/rules'
 
 type Material = {
   id: string
@@ -15,6 +18,7 @@ type Material = {
   total_qty: number
   active: boolean
   storage_location_id: string | null
+  image_path: string | null
   storage_locations?: { name: string }
 }
 type StorLoc = { id: string; name: string; description: string | null; active: boolean }
@@ -47,6 +51,10 @@ export default function MaterialsAdmin() {
   const [mQty, setMQty] = useState<number | ''>('')
   const [mStor, setMStor] = useState('')
   const [mDesc, setMDesc] = useState('')
+  const [mImage, setMImage] = useState<File | null>(null)
+  const [mImagePreview, setMImagePreview] = useState<string | null>(null)
+  const [removeImage, setRemoveImage] = useState(false)
+  const [imagesEnabled, setImagesEnabled] = useState(true)
   const [savingM, setSavingM] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [sName, setSName] = useState('')
@@ -95,6 +103,12 @@ export default function MaterialsAdmin() {
   )
 
   useEffect(() => { void init() }, [])
+  useEffect(() => {
+    if (!mImage) { setMImagePreview(null); return }
+    const preview = URL.createObjectURL(mImage)
+    setMImagePreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [mImage])
   useEffect(() => { setPage(1) }, [materialSearch, materialStatus, materialLocation])
   useEffect(() => {
     if (!selectedMaterialId && materials[0]) setSelectedMaterialId(materials[0].id)
@@ -103,15 +117,17 @@ export default function MaterialsAdmin() {
   async function init() {
     setLoading(true)
     try {
-      const [{ data: mats, error: me }, { data: sl, error: se }, { data: zs, error: ze }] = await Promise.all([
+      const [{ data: mats, error: me }, { data: sl, error: se }, { data: zs, error: ze }, imageCatalog] = await Promise.all([
         supabase.from('materials').select('id,name,description,total_qty,active,storage_location_id, storage_locations:storage_location_id(name)').order('name'),
         supabase.from('storage_locations').select('id,name,description,active').order('name'),
         supabase.from('field_zones').select('id,name,active').order('name'),
+        loadMaterialImageCatalog(),
       ])
       if (me) throw me
       if (se) throw se
       if (ze) throw ze
-      setMaterials((mats as any) ?? [])
+      setImagesEnabled(imageCatalog.enabled)
+      setMaterials(((mats as Material[]) ?? []).map((m) => ({ ...m, image_path: imageCatalog.paths.get(m.id) || null })))
       setStorLocs((sl as any) ?? [])
       setZones((zs as any) ?? [])
     } catch (e: any) {
@@ -127,6 +143,8 @@ export default function MaterialsAdmin() {
     setMQty('')
     setMStor('')
     setMDesc('')
+    setMImage(null)
+    setRemoveImage(false)
   }
 
   function openNewMaterial() {
@@ -143,7 +161,17 @@ export default function MaterialsAdmin() {
     setMQty(material.total_qty)
     setMStor(material.storage_location_id || '')
     setMDesc(material.description || '')
+    setMImage(null)
+    setRemoveImage(false)
     requestAnimationFrame(() => document.getElementById('materials124-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }
+
+  function chooseMaterialImage(file: File | undefined) {
+    if (!file) return
+    const error = validateMaterialImage(file)
+    if (error) { toast.error(error); return }
+    setMImage(file)
+    setRemoveImage(false)
   }
 
   async function saveMaterial() {
@@ -151,21 +179,40 @@ export default function MaterialsAdmin() {
     if (!mName.trim()) return toast.error('ادخل اسم الأداة')
     const qty = Number(mQty)
     if (!isFinite(qty) || qty < 0) return toast.error('الكمية غير صالحة')
+    if ((mImage || removeImage) && !imagesEnabled) return toast.error('ميزة صور الأدوات تحتاج تنفيذ Migration 26 على Supabase أولًا')
 
     setSavingM(true)
     try {
+      let materialId = editId
+      const previousPath = materials.find((item) => item.id === editId)?.image_path || null
       if (editId) {
         const { error } = await supabase.from('materials')
           .update({ name: mName.trim(), total_qty: qty, storage_location_id: mStor || null, description: mDesc || null })
           .eq('id', editId)
         if (error) throw error
-        toast.success('تم تعديل الأداة')
       } else {
-        const { error } = await supabase.from('materials')
+        const { data: created, error } = await supabase.from('materials')
           .insert({ name: mName.trim(), total_qty: qty, storage_location_id: mStor || null, description: mDesc || null })
+          .select('id').single()
         if (error) throw error
-        toast.success('تم إضافة الأداة')
+        materialId = created.id
       }
+      if (materialId && mImage) {
+        try { await saveMaterialPhoto(materialId, mImage, previousPath) }
+        catch (error: any) {
+          toast.error(`تم حفظ بيانات الأداة لكن فشل رفع الصورة: ${error?.message || 'خطأ في التخزين'}`)
+          await init()
+          return
+        }
+      } else if (materialId && removeImage) {
+        try { await removeMaterialPhoto(materialId, previousPath) }
+        catch (error: any) {
+          toast.error(`تم حفظ بيانات الأداة لكن تعذر إزالة الصورة: ${error?.message || ''}`)
+          await init()
+          return
+        }
+      }
+      toast.success(editId ? 'تم تحديث الأداة وصورتها' : 'تم إضافة الأداة')
       resetMaterialForm()
       await init()
     } catch (e: any) {
@@ -258,6 +305,7 @@ export default function MaterialsAdmin() {
         <article className="is-gold"><span><InventoryGlyph kind="storage" /></span><div><small>أماكن التخزين</small><strong>{metrics.locations}</strong></div></article>
       </section>
 
+      {!imagesEnabled && <InlineAlert tone="info" title="صور الأدوات غير مفعلة في قاعدة البيانات">يمكنك إدارة الأدوات كالمعتاد، لكن رفع الصور يحتاج تطبيق Migration 26 على Supabase.</InlineAlert>}
       {!gate.canManageInventory() && (
         <InlineAlert tone="info" title="وضع العرض فقط">هذه الشاشة متاحة للعرض فقط. الإدارة مسموحة للأدمن أو المسؤول العام للأدوات.</InlineAlert>
       )}
@@ -294,7 +342,7 @@ export default function MaterialsAdmin() {
                     <tbody>
                       {pagedMaterials.map((material) => (
                         <tr key={material.id} className={selectedMaterial?.id === material.id ? 'is-selected' : ''} onClick={() => setSelectedMaterialId(material.id)}>
-                          <td><div className="materials124-tool-name"><span className="materials124-tool-icon"><InventoryGlyph /></span><div><strong>{material.name}</strong><small>{material.description || 'بدون وصف'}</small></div></div></td>
+                          <td><div className="materials124-tool-name"><span className="materials124-tool-icon">{material.image_path && materialPhotoUrl(material.image_path) ? <img src={materialPhotoUrl(material.image_path)!} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : null}<InventoryGlyph /></span><div><strong>{material.name}</strong><small>{material.description || 'بدون وصف'}</small></div></div></td>
                           <td><span className="materials124-location">{material.storage_locations?.name || 'بدون مكان تخزين'}</span></td>
                           <td><strong className="materials124-qty">{material.total_qty}</strong></td>
                           <td><span className={`materials124-state ${material.active ? 'is-active' : 'is-inactive'}`}>{material.active ? 'مفعّلة' : 'موقوفة'}</span></td>
@@ -319,6 +367,7 @@ export default function MaterialsAdmin() {
                 <div className="materials124-side-title"><div><span>تفاصيل الأداة</span><h2>{selectedMaterial?.name || 'اختر أداة'}</h2></div><span className="materials124-detail-icon"><InventoryGlyph /></span></div>
                 {selectedMaterial ? (
                   <>
+                    {selectedMaterial.image_path && materialPhotoUrl(selectedMaterial.image_path) && <div className="materials124-detail-photo"><img src={materialPhotoUrl(selectedMaterial.image_path)!} alt={`صورة ${selectedMaterial.name}`} onError={(e) => { e.currentTarget.style.display = 'none' }} /></div>}
                     <div className="materials124-detail-grid">
                       <div><small>الكمية الإجمالية</small><strong>{selectedMaterial.total_qty}</strong></div>
                       <div><small>الحالة</small><strong className={selectedMaterial.active ? 'good' : 'muted'}>{selectedMaterial.active ? 'مفعّلة' : 'موقوفة'}</strong></div>
@@ -350,6 +399,21 @@ export default function MaterialsAdmin() {
               <label><span>الكمية الإجمالية</span><input type="number" min={0} value={mQty} onChange={(e) => setMQty(e.target.value === '' ? '' : Number(e.target.value))} /></label>
               <label><span>مكان التخزين</span><select value={mStor} onChange={(e) => setMStor(e.target.value)}><option value="">— بدون —</option>{storLocs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
               <label className="materials124-editor-wide"><span>الوصف / ملاحظات</span><textarea rows={3} value={mDesc} onChange={(e) => setMDesc(e.target.value)} placeholder="وصف مختصر يساعد المسؤولين على معرفة الأداة..." /></label>
+              <div className="materials124-editor-wide materials124-image-editor">
+                <div className="materials124-image-preview">
+                  {mImagePreview || (editId && !removeImage && materialPhotoUrl(materials.find((m) => m.id === editId)?.image_path)) ?
+                    <img src={mImagePreview || materialPhotoUrl(materials.find((m) => m.id === editId)?.image_path)!} alt="معاينة صورة الأداة" /> :
+                    <span><InventoryGlyph /></span>}
+                </div>
+                <div className="materials124-image-controls">
+                  <strong>صورة الأداة</strong>
+                  <small>تظهر الصورة في كروت حجز الأدوات. JPG أو PNG أو WebP — بحد أقصى 3MB.</small>
+                  <input type="file" accept="image/jpeg,image/png,image/webp" aria-label="اختيار صورة الأداة" disabled={!gate.canManageInventory() || !imagesEnabled} onChange={(e) => { chooseMaterialImage(e.target.files?.[0]); e.target.value = '' }} />
+                  {(mImage || (editId && !removeImage && materials.some((m) => m.id === editId && m.image_path))) &&
+                    <button type="button" className="materials124-secondary" disabled={!gate.canManageInventory() || !imagesEnabled} onClick={() => { setMImage(null); setRemoveImage(true) }}>إزالة الصورة</button>}
+                  {!imagesEnabled && <small>يلزم تنفيذ Migration 26 قبل رفع الصور.</small>}
+                </div>
+              </div>
             </div>
             <div className="materials124-editor-actions">{editId && <button type="button" className="materials124-secondary" onClick={resetMaterialForm}>إلغاء التعديل</button>}<LoadingButton loading={savingM} onClick={saveMaterial} disabled={!gate.canManageInventory()}>{editId ? 'حفظ التعديل' : 'إضافة الأداة'}</LoadingButton></div>
           </section>

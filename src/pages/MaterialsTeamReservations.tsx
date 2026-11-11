@@ -10,9 +10,11 @@ import { useScoutYear } from '../components/ScoutYearProvider'
 import { clampDateToBounds, getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { EmptyState } from '../components/ui/EmptyState'
 import scoutBackpack from '../assets/scout-theme/scout-backpack.webp'
+import '../features/materialImages/materialImages.css'
+import { loadMaterialImageCatalog, materialPhotoUrl } from '../features/materialImages/api'
 
 type Team = { id: string; name: string }
-type Material = { id: string; name: string; total_qty: number }
+type Material = { id: string; name: string; total_qty: number; image_path: string | null }
 type Resv = { id: string; material_id: string; team_id: string; qty: number; starts_at: string; ends_at: string }
 type DayRow = {
   id: string
@@ -184,14 +186,15 @@ export default function MaterialsTeamReservations() {
   async function init() {
     setLoading(true)
     try {
-      const [{ data: ts, error: te }, { data: ms, error: me }] = await Promise.all([
+      const [{ data: ts, error: te }, { data: ms, error: me }, imageCatalog] = await Promise.all([
         supabase.from('teams').select('id,name').order('name'),
         supabase.from('materials').select('id,name,total_qty').eq('active', true).order('name'),
+        loadMaterialImageCatalog(),
       ])
       if (te) throw te
       if (me) throw me
       setTeams((ts as any) ?? [])
-      setMaterials((ms as any) ?? [])
+      setMaterials(((ms as Material[]) ?? []).map((m) => ({ ...m, image_path: imageCatalog.paths.get(m.id) || null })))
       if (ms?.length) setMatId(ms[0].id)
 
       const tm = await fetchTerms()
@@ -467,7 +470,7 @@ export default function MaterialsTeamReservations() {
                     aria-pressed={selected}
                   >
                     <span className="materials119-tool-status">{selected ? 'مختارة' : 'متاحة'}</span>
-                    <div className={`materials119-tool-visual cat-${cat}`}><MaterialGlyph category={cat} /></div>
+                    <div className={`materials119-tool-visual cat-${cat}`}><MaterialGlyph category={cat} />{material.image_path && materialPhotoUrl(material.image_path) && <img className="materials119-tool-photo" src={materialPhotoUrl(material.image_path)!} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} />}</div>
                     <div className="materials119-tool-copy">
                       <strong>{material.name}</strong>
                       <span>{selected && available !== null ? `المتاح في الفترة: ${available}` : `إجمالي المخزون: ${material.total_qty}`}</span>
@@ -486,7 +489,7 @@ export default function MaterialsTeamReservations() {
               <span>تفاصيل الحجز</span>
               <strong>{selectedMaterial?.name || 'اختر أداة'}</strong>
             </div>
-            <span className="materials119-calendar-badge">▣</span>
+            {selectedMaterial?.image_path && materialPhotoUrl(selectedMaterial.image_path) ? <img className="materials119-booking-photo" src={materialPhotoUrl(selectedMaterial.image_path)!} alt={`صورة ${selectedMaterial.name}`} /> : <span className="materials119-calendar-badge">▣</span>}
           </div>
 
           {isAdmin ? (
@@ -565,7 +568,7 @@ export default function MaterialsTeamReservations() {
           <div className="materials119-reservation-list">
             {listFiltered.map((reservation) => (
               <article key={reservation.id} className="materials119-reservation-row">
-                <div className="materials119-reservation-glyph"><MaterialGlyph category={materialCategory(materials.find((m) => m.id === reservation.material_id)?.name || '')} /></div>
+                <div className="materials119-reservation-glyph">{materials.find((m) => m.id === reservation.material_id)?.image_path && materialPhotoUrl(materials.find((m) => m.id === reservation.material_id)?.image_path) ? <img src={materialPhotoUrl(materials.find((m) => m.id === reservation.material_id)?.image_path)!} alt="" /> : <MaterialGlyph category={materialCategory(materials.find((m) => m.id === reservation.material_id)?.name || '')} />}</div>
                 <div className="materials119-reservation-main">
                   <strong>{materials.find((m) => m.id === reservation.material_id)?.name || 'أداة'}</strong>
                   <span>{formatDateTime(reservation.starts_at)} ← {formatDateTime(reservation.ends_at)}</span>
