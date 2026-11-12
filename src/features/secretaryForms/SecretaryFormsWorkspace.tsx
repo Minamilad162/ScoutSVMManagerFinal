@@ -165,8 +165,8 @@ export function SecretaryFormsWorkspace({
       {canUpload ? (
         <section className="secforms-upload" aria-label="رفع استمارات الفريق">
           <div className="secforms-section-heading">
-            <div><h3>رفع استمارات جديدة</h3><p>يمكن لسكرتير الفريق رفع ملف PDF واحد أو عدة ملفات لنفس السنة.</p></div>
-            <span className="secforms-pill">رفع لفريق {teamName} فقط</span>
+            <div><h3>رفع استمارات جديدة</h3><p>يمكن لمدير السكرتارية رفع ملفات الفريق المختار، ولسكرتير الفريق رفع ملفات فريقه فقط.</p></div>
+            <span className="secforms-pill">الرفع إلى {teamName} · {scoutYearLabel}</span>
           </div>
           <input
             ref={fileInput} type="file" id={`secforms-upload-${teamId}`} accept=".pdf,application/pdf"
@@ -189,7 +189,7 @@ export function SecretaryFormsWorkspace({
                 <p className="secforms-upload-hint">الملفات خاصة بالفريق ومش متاحة للعامة. تقدر ترفع أكثر من ملف لكل سنة.</p>
               )}
               <button type="button" className="secforms-primary" disabled={uploading || !chosenFiles.length} onClick={submit}>
-                {uploading ? 'جارٍ رفع الملفات...' : '↑ رفع الاستمارات'}
+                {uploading ? 'جارٍ رفع الملفات...' : `↑ رفع استمارات ${teamName}`}
               </button>
             </div>
           </div>
@@ -198,7 +198,7 @@ export function SecretaryFormsWorkspace({
           </div>}
         </section>
       ) : (
-        <div className="secforms-readonly">🔒 الاستعراض متاح هنا؛ رفع الملفات مسموح لسكرتير الفريق نفسه في السنة الكشفية الحالية فقط.</div>
+        <div className="secforms-readonly">🔒 الاستعراض متاح هنا؛ الرفع مسموح لمدير السكرتارية العام أو سكرتير هذا الفريق في السنة الكشفية الحالية فقط.</div>
       )}
 
       <section className="secforms-list" aria-label="استمارات الفريق">

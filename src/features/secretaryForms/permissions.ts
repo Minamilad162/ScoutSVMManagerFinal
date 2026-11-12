@@ -11,7 +11,10 @@ export function canUploadSecretaryForms(input: {
   const { teamId, scoutYearId, currentPhysicalScoutYearId, userId, isHistoricalView, roles } = input
   return Boolean(
     userId && teamId && scoutYearId && scoutYearId === currentPhysicalScoutYearId && !isHistoricalView
-    && roles.some(role => role.role_slug === 'responsable_secretary' && role.team_id === teamId)
+    && roles.some(role =>
+      role.role_slug === 'admin'
+      || (role.role_slug === 'responsable_secretary' && (role.team_id === null || role.team_id === teamId))
+    )
   )
 }
 export function visibleSecretaryTeams<T extends { id: string }>(teams: T[], roles: SecretaryRole[]) {
