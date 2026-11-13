@@ -1,4 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useScoutYear } from '../components/ScoutYearProvider'
+import { getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
+import { cairoDay, cairoLocalToISO, cairoRangeISO, bookingDateLabel } from '../features/reservations/bookingRecords'
+import { scopedFieldMeetingDays, preferredFieldMeeting, canBookFieldForTeam, fieldBookingUnavailableReason } from '../features/reservations/fieldTeamBooking'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../components/ui/Toaster'
 import { PageLoader } from '../components/ui/PageLoader'
@@ -6,7 +10,6 @@ import { fetchCurrentUserContext, fetchTerms } from '../features/reference/api'
 import { safeWriteAuditLog } from '../features/audit/api'
 import { buildFieldReservationSummary } from '../features/audit/humanize'
 import { LoadingButton } from '../components/ui/LoadingButton'
-import { useRoleGate } from '../hooks/useRoleGate'
 import { useAuth } from '../components/AuthProvider'
 import FieldMaps from '../components/FieldMaps'
 import { PageHero } from '../components/ui/PageHero'
@@ -37,40 +40,10 @@ type TeamRow = {
   field_zones: { name: string | null } | null
 }
 
-// ===== Helpers =====
-function pad2(n: number) { return String(n).padStart(2, '0') }
-function todayYMD() {
-  const now = new Date()
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
-}
-function ymdToDateParts(ymd: string) {
-  const [y, m, d] = ymd.split('-').map(Number)
-  return { y, m: m - 1, d }
-}
-// كوّن ISO من تاريخ (Y-M-D) + وقت (HH:MM) محلي → ISO (UTC) للتخزين الآمن
-function localYMDhmToISO(ymd: string, hm: string): string {
-  const { y, m, d } = ymdToDateParts(ymd)
-  const [hh, mm] = hm.split(':').map(Number)
-  const local = new Date(y, m, d, hh, mm, 0, 0)
-  return local.toISOString()
-}
-// تحقّق أن تاريخ داخل نطاق
-function withinRange(d: string, start?: string | null, end?: string | null) {
-  if (!d) return false
-  if (!start || !end) return true
-  return d >= start && d <= end
-}
-// حدود اليوم المختار (محلي → ISO)
-function getDayBoundsISO(ymd: string) {
-  const start = new Date(ymd + 'T00:00:00')
-  const end   = new Date(ymd + 'T23:59:59')
-  return { startISO: start.toISOString(), endISO: end.toISOString() }
-}
-
 export default function FieldReservationsTeam() {
   const toast = useToast()
-  const gate = useRoleGate()
   const { roles } = useAuth()
+  const { currentScoutYear, isReadOnlyView } = useScoutYear()
   const isAdmin = roles.some(r => r.role_slug === 'admin')
 
   const [loading, setLoading] = useState(true)
@@ -80,6 +53,7 @@ export default function FieldReservationsTeam() {
   const [teams, setTeams] = useState<Team[]>([])
   const [teamId, setTeamId] = useState<string>('')
   const [teamName, setTeamName] = useState<string>('')
+  const [memberTeamId, setMemberTeamId] = useState('')
 
   const [zones, setZones] = useState<Zone[]>([])
 
@@ -87,6 +61,8 @@ export default function FieldReservationsTeam() {
   const [terms, setTerms] = useState<Term[]>([])
   const [selTerm, setSelTerm] = useState<string>('')          // المختار في UI
   const [termDates, setTermDates] = useState<TermDateRow[]>([])
+  const termMeta = terms.find(t => t.id === selTerm) || null
+  const selectedTermBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
 
   // Meeting inputs
   const [mtype, setMtype] = useState<'preparation' | 'meeting'>('meeting')
@@ -94,6 +70,12 @@ export default function FieldReservationsTeam() {
   const [startTime, setStartTime] = useState<string>('16:00') // HH:MM
   const [endTime, setEndTime] = useState<string>('18:00')     // HH:MM
   const [zoneId, setZoneId] = useState<string>('')
+  const canBookTeam = canBookFieldForTeam(roles, teamId, memberTeamId, isReadOnlyView)
+  const blockReason = fieldBookingUnavailableReason({
+    canBook: canBookTeam, readOnly: isReadOnlyView, hasTeam: Boolean(teamId),
+    hasTerm: Boolean(selectedTermBounds), hasZone: Boolean(zoneId),
+    selectedDate: meetingDate, registeredDates: termDates, today: cairoDay(),
+  })
 
   // حجوزات الفريق (لليوم المختار فقط)
   const [rows, setRows] = useState<TeamRow[]>([])
@@ -104,102 +86,97 @@ export default function FieldReservationsTeam() {
 
   // ==== حجوزات الفريق في التاريخ المختار ====
   const [teamDayLoading, setTeamDayLoading] = useState(false)
+  const initRequestRef = useRef(0)
+  const dayRequestRef = useRef(0)
+  const teamRequestRef = useRef(0)
 
-  // ===== Init =====
-  useEffect(() => { init() }, [])
-  async function init() {
+  // Load the CURRENT selected Scout Year, not stale terms from another season.
+  useEffect(() => {
+    const request = ++initRequestRef.current
+    if (currentScoutYear?.id) void init(request)
+    return () => { ++initRequestRef.current }
+  }, [currentScoutYear?.id, isAdmin])
+  async function init(request: number) {
     setLoading(true)
+    setTerms([]); setSelTerm(''); setTermDates([]); setMeetingDate('')
+    setRows([]); setDayRows([]); setZoneId(''); setTeamId(''); setTeamName(''); setMemberTeamId('')
     try {
-      // Zones
-      const { data: z, error: ze } = await supabase
-        .from('field_zones')
-        .select('id,name')
-        .eq('active', true)
-        .order('name')
-      if (ze) throw ze
-      setZones((z as any) ?? [])
-      if (z && z.length) setZoneId(z[0].id)
+      const [zoneResult, termRows] = await Promise.all([
+        supabase.from('field_zones').select('id,name').eq('active', true).order('name'),
+        fetchTerms(),
+      ])
+      if (zoneResult.error) throw zoneResult.error
+      if (request !== initRequestRef.current) return
+      const zoneList = (zoneResult.data as Zone[]) || []
+      setZones(zoneList)
+      setZoneId(zoneList[0]?.id || '')
 
-      // Teams (حسب الصلاحية)
       if (isAdmin) {
-        const { data: ts, error: te } = await supabase
-          .from('teams')
-          .select('id,name')
-          .order('name')
-        if (te) throw te
-        setTeams((ts as any) ?? [])
-        if (ts && ts.length) {
-          setTeamId(ts[0].id)
-          setTeamName(ts[0].name)
-        }
+        const { data, error } = await supabase.from('teams').select('id,name').order('name')
+        if (error) throw error
+        if (request !== initRequestRef.current) return
+        const teamList = (data as Team[]) || []
+        setTeams(teamList)
+        setTeamId(teamList[0]?.id || '')
+        setTeamName(teamList[0]?.name || '')
       } else {
         const me = await fetchCurrentUserContext()
-        if (!me?.team_id) throw new Error('لا يوجد فريق مرتبط بحسابك')
+        if (request !== initRequestRef.current) return
+        if (!me?.team_id) throw new Error('لا يوجد فريق مرتبط بحسابك في السنة الكشفية الحالية')
+        setMemberTeamId(me.team_id)
         setTeamId(me.team_id)
         setTeamName(me.team_name || '—')
       }
-
-      // Terms (نجيب ونحدد الافتراضي النشط)
-      const tm = await fetchTerms()
-      setTerms(tm ?? [])
-
-      // حدد الترم النشط بناء على اليوم
-      const today = todayYMD()
-      let activeTermId = tm?.find(t => t.start_date && t.end_date && withinRange(today, t.start_date, t.end_date))?.id
-      if (!activeTermId && tm && tm.length) activeTermId = tm[0].id
-      if (activeTermId) setSelTerm(activeTermId)
-
-      // تاريخ افتراضي
-      setMeetingDate(today) // هيتعدل تلقائيًا لو mtype=meeting بعد تحميل termDates
+      setTerms(termRows || [])
+      const today = cairoDay()
+      const active = termRows.find(t => t.start_date && t.end_date && today >= t.start_date && today <= t.end_date)
+      setSelTerm((active || termRows[0])?.id || '')
     } catch (e: any) {
-      toast.error(e.message || 'تعذر التحميل')
+      if (request === initRequestRef.current) toast.error(e.message || 'تعذر تحميل بيانات الحجز')
     } finally {
-      setLoading(false)
+      if (request === initRequestRef.current) setLoading(false)
     }
   }
 
-  // تحميل تواريخ الترم المختار
-  useEffect(() => { if (selTerm) loadTermDates(selTerm) }, [selTerm])
-  async function loadTermDates(termId: string) {
-    try {
-      const { data, error } = await supabase
-        .from('term_meeting_dates')
-        .select('id, meeting_date')
-        .eq('term_id', termId)
-        .order('meeting_date', { ascending: true })
-      if (error) throw error
-      const list = (data as any as TermDateRow[]) ?? []
-      setTermDates(list)
-
-      // لو النوع Meeting اختار أول تاريخ متاح تلقائيًا
-      if (mtype === 'meeting') {
-        if (list.length) setMeetingDate(list[0].meeting_date)
-        else setMeetingDate('') // مفيش تواريخ مضافة
-      }
-    } catch (e: any) {
-      toast.error(e.message || 'تعذر تحميل تواريخ الترم')
-    }
-  }
-
-  // تغيير نوع اليوم: Meeting => استخدم قائمة التواريخ؛ Preparation => تاريخ حر (اليوم افتراضيًا)
+  // Meeting dates are filtered to the selected term/year. Ignore stale network responses.
   useEffect(() => {
-    if (mtype === 'meeting') {
-      if (termDates.length) setMeetingDate(termDates[0].meeting_date)
-      else setMeetingDate('')
-    } else {
-      if (!meetingDate) setMeetingDate(todayYMD())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mtype, termDates])
+    let active = true
+    setTermDates([])
+    setMeetingDate('')
+    if (!selTerm || !selectedTermBounds) return () => { active = false }
+    void (async () => {
+      try {
+        const { data, error } = await supabase.from('term_meeting_dates')
+          .select('id,meeting_date').eq('term_id', selTerm)
+          .gte('meeting_date', selectedTermBounds.start)
+          .lte('meeting_date', selectedTermBounds.end)
+          .order('meeting_date', { ascending: true })
+        if (error) throw error
+        if (!active) return
+        const available = scopedFieldMeetingDays((data || []) as TermDateRow[], selectedTermBounds)
+        setTermDates(available)
+        setMeetingDate(preferredFieldMeeting(available, cairoDay()))
+      } catch (e: any) {
+        if (active) toast.error(e.message || 'تعذر تحميل اجتماعات الترم')
+      }
+    })()
+    return () => { active = false }
+  }, [selTerm, selectedTermBounds?.start, selectedTermBounds?.end, currentScoutYear?.id])
 
   // ===== حجوزات كل الفرق في التاريخ المختار =====
-  useEffect(() => { if (meetingDate) refreshDayReservations() }, [meetingDate])
+  useEffect(() => {
+    if (meetingDate) void refreshDayReservations()
+    else { ++dayRequestRef.current; setDayRows([]) }
+  }, [meetingDate, currentScoutYear?.id])
 
   async function refreshDayReservations() {
+    const request = ++dayRequestRef.current
     if (!meetingDate) { setDayRows([]); return }
     setDayLoading(true)
     try {
-      const { startISO, endISO } = getDayBoundsISO(meetingDate)
+      const range = cairoRangeISO(meetingDate, meetingDate)
+      if (!range) { setDayRows([]); return }
+      const { start: startISO, end: endISO } = range
       const { data, error } = await supabase
         .from('field_reservations')
         .select('id, starts_at, ends_at, field_zones:field_zone_id(name), teams:team_id(name)')
@@ -208,22 +185,28 @@ export default function FieldReservationsTeam() {
         .gt('ends_at', startISO)
         .order('starts_at', { ascending: true })
       if (error) throw error
-      setDayRows((data as any as DayRow[]) ?? [])
+      if (request === dayRequestRef.current) setDayRows((data as any as DayRow[]) ?? [])
     } catch (e: any) {
-      toast.error(e.message || 'تعذر تحميل حجوزات هذا التاريخ')
+      if (request === dayRequestRef.current) toast.error(e.message || 'تعذر تحميل حجوزات هذا التاريخ')
     } finally {
-      setDayLoading(false)
+      if (request === dayRequestRef.current) setDayLoading(false)
     }
   }
 
   // ==== حجوزات الفريق لليوم المختار (تصفية بالتاريخ) ====
-  useEffect(() => { if (teamId && meetingDate) refreshTeamDayReservations() }, [teamId, meetingDate])
+  useEffect(() => {
+    if (teamId && meetingDate) void refreshTeamDayReservations()
+    else { ++teamRequestRef.current; setRows([]) }
+  }, [teamId, meetingDate, currentScoutYear?.id])
 
   async function refreshTeamDayReservations() {
+    const request = ++teamRequestRef.current
     if (!teamId || !meetingDate) { setRows([]); return }
     setTeamDayLoading(true)
     try {
-      const { startISO, endISO } = getDayBoundsISO(meetingDate)
+      const range = cairoRangeISO(meetingDate, meetingDate)
+      if (!range) { setRows([]); return }
+      const { start: startISO, end: endISO } = range
       const { data, error } = await supabase
         .from('field_reservations')
         .select('id, starts_at, ends_at, field_zones:field_zone_id(name)')
@@ -233,17 +216,18 @@ export default function FieldReservationsTeam() {
         .gt('ends_at', startISO)   // وينتهي بعد بداية اليوم → overlap
         .order('starts_at', { ascending: true })
       if (error) throw error
-      setRows((data as any as TeamRow[]) ?? [])
+      if (request === teamRequestRef.current) setRows((data as any as TeamRow[]) ?? [])
     } catch (e: any) {
-      toast.error(e.message || 'تعذر تحميل حجوزات الفريق لهذا التاريخ')
+      if (request === teamRequestRef.current) toast.error(e.message || 'تعذر تحميل حجوزات الفريق لهذا التاريخ')
     } finally {
-      setTeamDayLoading(false)
+      if (request === teamRequestRef.current) setTeamDayLoading(false)
     }
   }
 
   // ===== Actions =====
   async function save() {
-    // فالفيديشن أساسي
+    // Never submit unauthorized, archived or incomplete bookings.
+    if (blockReason) return toast.error(blockReason)
     if (!teamId) return toast.error('اختر الفريق')
     if (!zoneId) return toast.error('اختر القطاع')
 
@@ -251,41 +235,41 @@ export default function FieldReservationsTeam() {
       if (!selTerm) return toast.error('اختر الترم')
       if (!meetingDate) return toast.error('اختر تاريخ الاجتماع من قائمة التواريخ')
       // تأكد التاريخ من ضمن القائمة
-      if (!termDates.some(d => d.meeting_date === meetingDate)) {
+      if (!termDates.some(d => d.meeting_date === meetingDate) || !inDateBounds(meetingDate, selectedTermBounds)) {
         return toast.error('التاريخ المختار غير موجود ضمن تواريخ الترم')
       }
       // (اختياري) تحقّق داخل نطاق الترم المختار
       const t = terms.find(t => t.id === selTerm)
-      if (t && !withinRange(meetingDate, t.start_date, t.end_date)) {
+      if (t && !inDateBounds(meetingDate, getTermYearBounds(currentScoutYear, t))) {
         return toast.error('التاريخ خارج حدود الترم')
       }
     } else {
       if (!meetingDate) return toast.error('اختر تاريخ الاجتماع')
       // (اختياري) لو فيه ترم نشط حاليًا، تقدر تمنع تاريخ خارج النطاق
       const t = terms.find(t => t.id === selTerm)
-      if (t?.start_date && t?.end_date && !withinRange(meetingDate, t.start_date, t.end_date)) {
+      if (t && !inDateBounds(meetingDate, getTermYearBounds(currentScoutYear, t))) {
         return toast.error('التاريخ خارج حدود الترم')
       }
     }
 
     if (!startTime || !endTime) return toast.error('أدخل وقتي البداية والنهاية')
 
-    // كوّن Date محلي من (meetingDate + HH:MM)
-    const startISO = localYMDhmToISO(meetingDate, startTime)
-    const endISO   = localYMDhmToISO(meetingDate, endTime)
+    // Cairo time including daylight saving transitions, never browser-local UTC.
+    const startISO = cairoLocalToISO(`${meetingDate}T${startTime}`)
+    const endISO = cairoLocalToISO(`${meetingDate}T${endTime}`)
+    if (!startISO || !endISO) return toast.error('الأوقات المختارة غير صالحة بتوقيت القاهرة')
 
     // تأكد إن البداية قبل النهاية
-    if (new Date(startISO) >= new Date(endISO)) {
-      return toast.error('وقت البداية يجب أن يسبق وقت النهاية')
-    }
+    if (new Date(startISO) >= new Date(endISO)) return toast.error('وقت البداية يجب أن يسبق وقت النهاية')
+    if (new Date(startISO).getTime() <= Date.now()) return toast.error('لا يمكن إنشاء حجز بموعد بدأ بالفعل')
 
     setSaving(true)
     try {
-      // لو عندك جدول meetings وعايز تربط: (زي كودك القديم)
-      const { data: mrow, error: me } = await supabase
-        .from('meetings')
-        .upsert({ team_id: teamId, meeting_date: meetingDate, mtype }, { onConflict: 'team_id,meeting_date,mtype' })
-        .select('id').maybeSingle()
+      // Booking must not create/update a meeting: materials staff can reserve
+      // their team's field but are not entitled to write the meetings table.
+      const { data: mrow, error: me } = await supabase.from('meetings')
+        .select('id').eq('team_id', teamId).eq('meeting_date', meetingDate)
+        .eq('mtype', mtype).maybeSingle()
       if (me) throw me
 
       const { data: insertedReservation, error: ie } = await supabase
@@ -347,6 +331,7 @@ export default function FieldReservationsTeam() {
   }
 
   async function cancel(id: string) {
+    if (!canBookTeam) return toast.error('ليس لديك صلاحية إلغاء هذا الحجز')
     setCanceling(id)
     try {
       const reservation = rows.find((row) => row.id === id)
@@ -447,7 +432,7 @@ export default function FieldReservationsTeam() {
       )}
 
       <SectionCard className="teamops127-primary-panel" title="إضافة حجز جديد" description="اختر الترم، التاريخ، القطاع، ثم وقت البداية والنهاية قبل تأكيد الحجز.">
-      <div className={`${(!isAdmin && !gate.canBookReservations(teamId)) ? 'opacity-60 pointer-events-none' : ''}`}>
+      <div>
         <div className="grid md:grid-cols-6 gap-2 items-end">
           {/* اختيار نوع اليوم */}
           <div className="md:col-span-2">
@@ -462,6 +447,7 @@ export default function FieldReservationsTeam() {
           <div className="md:col-span-2">
             <label className="text-sm">الترم</label>
             <select className="border rounded-xl p-2 w-full cursor-pointer" value={selTerm} onChange={e=>setSelTerm(e.target.value)}>
+              {!terms.length && <option value="">لا توجد ترمات في السنة الكشفية</option>}
               {terms.map(t => (
                 <option key={t.id} value={t.id}>
                   {t.year} — {t.name}{t.start_date && t.end_date ? ` (${t.start_date} → ${t.end_date})` : ''}
@@ -479,7 +465,7 @@ export default function FieldReservationsTeam() {
                 value={meetingDate}
                 onChange={e=>setMeetingDate(e.target.value)}
               >
-                {termDates.length === 0 && <option value="">— لا توجد تواريخ —</option>}
+                {termDates.length === 0 && <option value="">— لا توجد اجتماعات مسجلة —</option>}
                 {termDates.map(d => <option key={d.id} value={d.meeting_date}>{d.meeting_date}</option>)}
               </select>
             ) : (
@@ -488,8 +474,8 @@ export default function FieldReservationsTeam() {
                 className="border rounded-xl p-2 w-full"
                 value={meetingDate}
                 onChange={e=>setMeetingDate(e.target.value)}
-                min={terms.find(t=>t.id===selTerm)?.start_date ?? undefined}
-                max={terms.find(t=>t.id===selTerm)?.end_date ?? undefined}
+                min={selectedTermBounds?.start}
+                max={selectedTermBounds?.end}
               />
             )}
           </div>
@@ -498,6 +484,7 @@ export default function FieldReservationsTeam() {
           <div className="md:col-span-2">
             <label className="text-sm">القطاع</label>
             <select className="border rounded-xl p-2 w-full cursor-pointer" value={zoneId} onChange={e=>setZoneId(e.target.value)}>
+              {!zones.length && <option value="">لا توجد قطاعات مفعلة</option>}
               {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </div>
@@ -523,9 +510,10 @@ export default function FieldReservationsTeam() {
           </div>
 
           <div className="md:col-span-6 text-end">
-            <LoadingButton loading={saving} onClick={save}>حجز القطاع</LoadingButton>
+            <LoadingButton loading={saving} disabled={Boolean(blockReason)} onClick={save}>حجز القطاع</LoadingButton>
           </div>
         </div>
+        {blockReason && <div role="status" className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-950">{blockReason}</div>}
       </div>
       </SectionCard>
 
@@ -552,10 +540,10 @@ export default function FieldReservationsTeam() {
                 <tr key={r.id} className="border-t">
                   <td className="p-2">{r.field_zones?.name || '—'}</td>
                   {/* Postgres بيخزن UTC (timestamptz) — هنا بنعرض محلي */}
-                  <td className="p-2">{new Date(r.starts_at).toLocaleString()}</td>
-                  <td className="p-2">{new Date(r.ends_at).toLocaleString()}</td>
+                  <td className="p-2">{bookingDateLabel(r.starts_at)}</td>
+                  <td className="p-2">{bookingDateLabel(r.ends_at)}</td>
                   <td className="p-2 text-center">
-                    <button className="btn border" onClick={()=>cancel(r.id)} disabled={canceling===r.id}>{canceling===r.id ? '...' : 'إلغاء'}</button>
+                    <button className="btn border" onClick={()=>cancel(r.id)} disabled={canceling===r.id || !canBookTeam}>{canceling===r.id ? '...' : 'إلغاء'}</button>
                   </td>
                 </tr>
               ))}
@@ -587,8 +575,8 @@ export default function FieldReservationsTeam() {
               {dayRows.map(r => (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">{r.field_zones?.name || '—'}</td>
-                  <td className="p-2">{new Date(r.starts_at).toLocaleString()}</td>
-                  <td className="p-2">{new Date(r.ends_at).toLocaleString()}</td>
+                  <td className="p-2">{bookingDateLabel(r.starts_at)}</td>
+                  <td className="p-2">{bookingDateLabel(r.ends_at)}</td>
                   <td className="p-2">{r.teams?.name || '—'}</td>
                 </tr>
               ))}
