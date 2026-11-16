@@ -4,7 +4,6 @@ import { PageLoader } from '../components/ui/PageLoader'
 import { fetchCurrentUserContext, fetchTerms } from '../features/reference/api'
 import { LoadingButton } from '../components/ui/LoadingButton'
 import { useToast } from '../components/ui/Toaster'
-import { useRoleGate } from '../hooks/useRoleGate'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
 import { clampDateToBounds, getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
@@ -12,6 +11,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import scoutBackpack from '../assets/scout-theme/scout-backpack.webp'
 import '../features/materialImages/materialImages.css'
 import { loadMaterialImageCatalog, materialPhotoUrl } from '../features/materialImages/api'
+import { canManageMaterialBookingsAcrossTeams, canBookMaterialsForTeam, materialBookableTeams, preferredMaterialBookingTeamId, materialBookingPermissionMessage } from '../features/reservations/materialBookingPermissions'
 
 type Team = { id: string; name: string }
 type Material = { id: string; name: string; total_qty: number; image_path: string | null }
@@ -112,9 +112,8 @@ function MaterialGlyph({ category }: { category: Exclude<MaterialCategory, 'all'
 
 export default function MaterialsTeamReservations() {
   const { roles } = useAuth()
-  const { currentScoutYear } = useScoutYear()
+  const { currentScoutYear, isReadOnlyView } = useScoutYear()
   const yearBounds = getScoutYearBounds(currentScoutYear)
-  const gate = useRoleGate()
   const toast = useToast()
 
   const [loading, setLoading] = useState(true)
@@ -137,14 +136,16 @@ export default function MaterialsTeamReservations() {
   const [category, setCategory] = useState<MaterialCategory>('all')
   const [showAllTeamBookings, setShowAllTeamBookings] = useState(false)
 
-  const isAdmin = roles.some((r) => r.role_slug === 'admin')
+  const canSelectAnyTeam = canManageMaterialBookingsAcrossTeams(roles)
+  const bookableTeams = useMemo(() => materialBookableTeams(roles, teams), [roles, teams])
   const termMeta = useMemo(() => terms.find((t) => t.id === termId) || null, [terms, termId])
   const termBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
   const termMinDT = termBounds ? `${termBounds.start}T00:00` : undefined
   const termMaxDT = termBounds ? `${termBounds.end}T23:59` : undefined
   const selectedMaterial = useMemo(() => materials.find((m) => m.id === matId) || null, [materials, matId])
   const teamName = teams.find((t) => t.id === teamId)?.name || 'الفريق'
-  const canBook = gate.canBookReservations(teamId)
+  const canBook = canBookMaterialsForTeam(roles, teamId, isReadOnlyView)
+  const bookingPermissionMessage = materialBookingPermissionMessage({ roles, teamId, isReadOnlyView })
 
   const effectiveFilterDay = useMemo(() => (startAt ? startAt.slice(0, 10) : ''), [startAt])
   const listFiltered = useMemo(() => {
@@ -201,13 +202,11 @@ export default function MaterialsTeamReservations() {
       setTerms((tm as any) ?? [])
       setTermId(tm[0]?.id || '')
 
-      if (isAdmin) {
-        if (ts?.length) setTeamId(ts[0].id)
-      } else {
-        const meRow = await fetchCurrentUserContext()
-        if (!meRow?.team_id) throw new Error('لا يوجد فريق مرتبط بحسابك')
-        setTeamId(meRow.team_id)
-      }
+      // Prefer the team granted by current-year booking roles, not an unrelated
+      // legacy member.team_id. A global materials lead may switch between teams.
+      const context = await fetchCurrentUserContext()
+      const eligibleTeamId = preferredMaterialBookingTeamId(roles, (ts as Team[]) ?? [], context?.team_id)
+      setTeamId(eligibleTeamId)
 
       const now = new Date()
       now.setSeconds(0, 0)
@@ -356,6 +355,7 @@ export default function MaterialsTeamReservations() {
   }
 
   async function saveReservation() {
+    if (!canBook) return toast.error(bookingPermissionMessage || 'ليس لديك صلاحية الحجز لهذا الفريق')
     if (!teamId) return toast.error('اختر الفريق')
     if (!matId) return toast.error('اختر الأداة')
     const q = Number(qty)
@@ -387,6 +387,7 @@ export default function MaterialsTeamReservations() {
   }
 
   async function cancelReservation(id: string) {
+    if (!canBook) return toast.error(bookingPermissionMessage || 'ليس لديك صلاحية إلغاء حجز لهذا الفريق')
     if (!window.confirm('هل تريد إلغاء هذا الحجز؟')) return
     try {
       const { error } = await supabase
@@ -492,11 +493,12 @@ export default function MaterialsTeamReservations() {
             {selectedMaterial?.image_path && materialPhotoUrl(selectedMaterial.image_path) ? <img className="materials119-booking-photo" src={materialPhotoUrl(selectedMaterial.image_path)!} alt={`صورة ${selectedMaterial.name}`} /> : <span className="materials119-calendar-badge">▣</span>}
           </div>
 
-          {isAdmin ? (
+          {canSelectAnyTeam ? (
             <label className="materials119-field">
               <span>الفريق</span>
-              <select value={teamId} onChange={(e) => setTeamId(e.target.value)}>
-                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+              <select value={teamId} onChange={(e) => setTeamId(e.target.value)} disabled={isReadOnlyView || bookableTeams.length === 0}>
+                {bookableTeams.length === 0 && <option value="">لا توجد فرق متاحة</option>}
+                {bookableTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
               </select>
             </label>
           ) : (
@@ -551,7 +553,7 @@ export default function MaterialsTeamReservations() {
               <span className="materials119-book-button">تأكيد الحجز <span>←</span></span>
             </LoadingButton>
           ) : (
-            <div className="materials119-unavailable">ليس لديك صلاحية للحجز لهذا الفريق.</div>
+            <div className="materials119-unavailable" role="status">{bookingPermissionMessage}</div>
           )}
           <p className="materials119-booking-note">سيتم فحص التعارض والكمية مرة أخرى من قاعدة البيانات عند التأكيد.</p>
         </aside>
@@ -574,7 +576,7 @@ export default function MaterialsTeamReservations() {
                   <span>{formatDateTime(reservation.starts_at)} ← {formatDateTime(reservation.ends_at)}</span>
                 </div>
                 <span className="materials119-reservation-qty">× {reservation.qty}</span>
-                <button type="button" className="materials119-cancel" onClick={() => cancelReservation(reservation.id)}>إلغاء</button>
+                <button type="button" className="materials119-cancel" onClick={() => cancelReservation(reservation.id)} disabled={!canBook || saving || isReadOnlyView}>إلغاء</button>
               </article>
             ))}
           </div>
