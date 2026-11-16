@@ -73,6 +73,8 @@ export function AuthProvider({ children }: { children: any }) {
   const [accountInactiveReason, setAccountInactiveReason] = useState<string | null>(null)
   const activeUserIdRef = useRef<string | null>(null)
   const credentialSignInRef = useRef(false)
+  const lastScopeRefreshAtRef = useRef(0)
+  const scopeRefreshPendingRef = useRef(false)
 
   const applyUser = (nextUser: any | null) => {
     activeUserIdRef.current = nextUser?.id ?? null
@@ -82,6 +84,7 @@ export function AuthProvider({ children }: { children: any }) {
   const applyAllowedSnapshot = (nextUser: any, snapshot: AccessSnapshot) => {
     setRoles(snapshot.roles)
     setMyTeamId(snapshot.myTeamId)
+    lastScopeRefreshAtRef.current = Date.now()
     setAccountInactive(false)
     setAccountInactiveReason(null)
     setAuthError(null)
@@ -226,6 +229,7 @@ export function AuthProvider({ children }: { children: any }) {
 
         setRoles(snapshot.roles)
         setMyTeamId(snapshot.myTeamId)
+        lastScopeRefreshAtRef.current = Date.now()
         setAccountInactive(false)
         setAccountInactiveReason(null)
       } catch (error) {
@@ -237,6 +241,56 @@ export function AuthProvider({ children }: { children: any }) {
     }
 
     void load()
+  }, [user?.id])
+
+  // Admin role/team changes can happen in another browser session. Refresh the
+  // current-year authorization snapshot when this tab becomes active again.
+  // A transient network error must never erase the last valid permissions.
+  useEffect(() => {
+    const userId = user?.id
+    if (!userId) return
+    let mounted = true
+
+    const refreshScope = async (force = false) => {
+      if (!mounted || credentialSignInRef.current || activeUserIdRef.current !== userId) return
+      if (scopeRefreshPendingRef.current) return
+      const now = Date.now()
+      if (!force && now - lastScopeRefreshAtRef.current < 12000) return
+      lastScopeRefreshAtRef.current = now
+      scopeRefreshPendingRef.current = true
+      try {
+        const snapshot = await fetchAccessSnapshot(userId)
+        if (!mounted || activeUserIdRef.current !== userId) return
+        if (!snapshot.allowed) {
+          await blockInactiveAccount(snapshot.reason || INACTIVE_REASON)
+          return
+        }
+        setRoles(snapshot.roles)
+        setMyTeamId(snapshot.myTeamId)
+        setAuthError(null)
+      } catch (error) {
+        // Retain the active user's last-known roles during offline/transient failures.
+        logError('AuthProvider.refreshCurrentYearScope', error as any, { userId })
+      } finally {
+        scopeRefreshPendingRef.current = false
+      }
+    }
+
+    const onFocus = () => { void refreshScope() }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshScope()
+    }
+    const onRoleUpdate = () => { void refreshScope(true) }
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('scoutsvm:roles-changed', onRoleUpdate)
+    return () => {
+      mounted = false
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('scoutsvm:roles-changed', onRoleUpdate)
+    }
   }, [user?.id])
 
   async function signInWithPassword(email: string, password: string): Promise<SignInResult> {
