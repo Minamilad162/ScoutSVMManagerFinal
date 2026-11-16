@@ -1,6 +1,7 @@
 
 import { useMemo } from 'react'
 import { useAuth } from '../components/AuthProvider'
+import { canBookMaterialsForTeam } from '../features/reservations/materialBookingPermissions'
 
 export function useRoleGate() {
   const { roles } = useAuth()
@@ -19,6 +20,6 @@ export function useRoleGate() {
     canEditBudget: (teamId?: string | null) => isAdmin || hasGlobal('responsable_finance'),
     canWriteExpense: (teamId?: string | null) => isAdmin || (teamId ? (hasTeam('responsable_finance', teamId) || hasTeam('chef_de_legion', teamId)) : false),
     canManageInventory: () => isAdmin || hasGlobal('responsable_materials'),
-    canBookReservations: (teamId?: string | null) => isAdmin || (teamId ? (hasTeam('responsable_materials', teamId) || hasTeam('chef_de_legion', teamId)) : false),
+    canBookReservations: (teamId?: string | null) => canBookMaterialsForTeam(roles, teamId || ''),
   }), [roles])
 }
