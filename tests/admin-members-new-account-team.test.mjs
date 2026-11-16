@@ -33,3 +33,18 @@ test('existing member role/team editing remains in place', () => {
   assert.match(source, /value=\{newRoleTeamId\}/)
   assert.match(source, /handleAddRole/)
 })
+
+test('missing new leader name is explained and focused rather than a generic toast', () => {
+  assert.match(source, /const chefFullNameInputRef = useRef<HTMLInputElement>\(null\)/)
+  assert.match(source, /if \(!chefFullName\.trim\(\)\) \{[\s\S]*?setChefNameError\(true\)[\s\S]*?focusChefFullName\(\)/)
+  assert.match(source, /field\?\.scrollIntoView/)
+  assert.match(source, /field\?\.focus\(\{ preventScroll: true \}\)/)
+  assert.match(source, /aria-invalid=\{chefNameError\}/)
+})
+
+test('selected account prompts for name without inventing it from email', () => {
+  assert.match(source, /selectedUser && !chefFullName\.trim\(\)/)
+  assert.match(source, /انتقل لحقل الاسم/)
+  assert.match(source, /ولا يُستخرج تلقائيًا من البريد الإلكتروني/)
+  assert.doesNotMatch(source, /setChefFullName\(selectedUser\.email/)
+})

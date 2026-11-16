@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { safeWriteAuditLog } from '../features/audit/api'
@@ -77,6 +77,8 @@ export default function AdminMembers() {
   const [tab, setTab] = useState<'chef' | 'equipier'>('chef')
 
   const [chefFullName, setChefFullName] = useState('')
+  const [chefNameError, setChefNameError] = useState(false)
+  const chefFullNameInputRef = useRef<HTMLInputElement>(null)
   const [chefPhone, setChefPhone] = useState('')
   const [chefTeamId, setChefTeamId] = useState('')
   const [chefRankId, setChefRankId] = useState<number | ''>('')
@@ -383,11 +385,23 @@ export default function AdminMembers() {
     return false
   }
 
+  function focusChefFullName() {
+    const field = chefFullNameInputRef.current
+    field?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    field?.focus({ preventScroll: true })
+  }
+
   async function saveChef() {
     if (!isAdmin) return toast.error('أذونات غير كافية')
     if (!selectedYearId) return toast.error('اختر السنة الكشفية أولًا')
     if (!ensureSelectedYearEditable()) return
-    if (!chefFullName.trim()) return toast.error('أدخل الاسم')
+    if (!chefFullName.trim()) {
+      setChefNameError(true)
+      toast.error('اكتب الاسم الكامل للقائد في أعلى النموذج قبل الحفظ')
+      focusChefFullName()
+      return
+    }
+    setChefNameError(false)
     if (!selectedUser) return toast.error('اختر مستخدم (Auth user)')
     if (selectedTeamRoles.length && !chefTeamId) return toast.error('اختر فريقًا للأدوار التي حددتها على الفريق المختار')
     if (chefTeamId && !teams.some((team) => team.id === chefTeamId)) return toast.error('الفريق المحدد غير موجود، أعد اختيار الفريق')
@@ -791,8 +805,22 @@ export default function AdminMembers() {
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
             <div className="min-w-0">
-              <label className="text-sm">الاسم الكامل</label>
-              <input className="border rounded-xl p-2 w-full" value={chefFullName} onChange={(e) => setChefFullName(e.target.value)} placeholder="مثلاً: أحمد علي" />
+              <label htmlFor="new-chef-full-name" className="text-sm font-semibold">الاسم الكامل <span className="text-red-600">*</span></label>
+              <input
+                id="new-chef-full-name"
+                ref={chefFullNameInputRef}
+                className={`border rounded-xl p-2 w-full ${chefNameError ? 'border-red-500 ring-2 ring-red-100' : ''}`}
+                value={chefFullName}
+                onChange={(e) => { setChefFullName(e.target.value); if (e.target.value.trim()) setChefNameError(false) }}
+                placeholder="اكتب الاسم الحقيقي للقائد"
+                autoComplete="name"
+                aria-required="true"
+                aria-invalid={chefNameError}
+                aria-describedby="new-chef-name-help"
+              />
+              <p id="new-chef-name-help" className={`mt-1 text-xs ${chefNameError ? 'font-semibold text-red-700' : 'text-slate-500'}`}>
+                {chefNameError ? 'الاسم الكامل مطلوب لإضافة القائد وربط الأكونت.' : 'مطلوب لحفظ ملف العضو، ولا يُستخرج تلقائيًا من البريد الإلكتروني.'}
+              </p>
             </div>
             <div className="min-w-0">
               <label className="text-sm">الهاتف</label>
@@ -948,6 +976,14 @@ export default function AdminMembers() {
             </div>
           </div>
 
+          {selectedUser && !chefFullName.trim() && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900" role="status">
+              <span>تم اختيار الأكونت والفريق والأدوار. باقي كتابة الاسم الكامل أعلى النموذج قبل الحفظ.</span>
+              <button type="button" onClick={focusChefFullName} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold hover:bg-amber-100">
+                انتقل لحقل الاسم
+              </button>
+            </div>
+          )}
           <div className="flex justify-end">
             <LoadingButton loading={savingChef} onClick={saveChef}>
               حفظ القائد والأدوار
