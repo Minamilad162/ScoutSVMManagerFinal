@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
 import { PageLoader } from './ui/PageLoader'
+import { hasCurrentTeamRole } from '../features/navigation/teamAccess'
 
 type Props = {
   children: ReactNode
@@ -10,6 +11,7 @@ type Props = {
   globalRoles?: string[]
   allRoles?: string[]
   sameTeamRoles?: string[]
+  anyTeamRoles?: readonly string[]
   allowAdmin?: boolean
 }
 
@@ -20,9 +22,10 @@ export function RouteAccessGuard({
   globalRoles = [],
   allRoles = [],
   sameTeamRoles = [],
+  anyTeamRoles = [],
   allowAdmin = true,
 }: Props) {
-  const { roles, loading } = useAuth()
+  const { roles, loading, myTeamId } = useAuth()
 
   if (loading) return <PageLoader visible text="جاري التحقق من الصلاحيات..." />
 
@@ -47,9 +50,11 @@ export function RouteAccessGuard({
       )
     })
 
+  const hasTeamScopedRole = hasCurrentTeamRole(roles, myTeamId, anyTeamRoles)
+
   const allowed = adminOnly
     ? isAdmin
-    : (allowAdmin && isAdmin) || hasAnyRole || hasGlobalRole || hasAllRoles || hasSameTeamRoles
+    : (allowAdmin && isAdmin) || hasAnyRole || hasGlobalRole || hasAllRoles || hasSameTeamRoles || hasTeamScopedRole
 
   if (!allowed) {
     return (
