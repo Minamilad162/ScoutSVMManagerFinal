@@ -13,7 +13,8 @@ test('read-only team overview for all active scoped staff roles, including norma
   for (const slug of TEAM_OVERVIEW_ROLES) {
     assert.equal(hasCurrentTeamRole(assigned(slug, 'team-1'), 'team-1'), true, slug)
     assert.equal(hasCurrentTeamRole(assigned(slug, 'team-2'), 'team-1'), false, slug)
-    assert.equal(hasCurrentTeamRole(assigned(slug, null), 'team-1'), false, slug)
+    // Global roles may see their own active team, but never a different team.
+    assert.equal(hasCurrentTeamRole(assigned(slug, null), 'team-1'), true, slug)
   }
   assert.equal(hasCurrentTeamRole(assigned('equipier', 'team-1'), 'team-1'), false)
   assert.equal(hasCurrentTeamRole(assigned('responsable_finance', 'team-1'), null), false)
@@ -45,4 +46,18 @@ test('team secretary sees minutes and tasks, material staff see tools catalog', 
   assert.match(nav, /if \(hasTeamSecretary\) \{[\s\S]*?\/app\/meeting-minutes'[\s\S]*?\/app\/meeting-tasks'/)
   assert.match(nav, /if \(hasTeamMaterials \|\| isGlobalMaterials\) \{[\s\S]*?\/app\/materials'/)
   assert.match(nav, /if \(isGlobalSecretary\) \{[\s\S]*?\/app\/AdminDashboard/)
+})
+
+test('global Chef de legion keeps team pages for their active-year team', () => {
+  assert.equal(hasCurrentTeamRole(assigned('chef_de_legion', null), 'team-1', ['chef_de_legion']), true)
+  assert.equal(hasCurrentTeamRole(assigned('chef_de_legion', 'team-2'), 'team-1', ['chef_de_legion']), false)
+  assert.equal(hasCurrentTeamRole(assigned('chef_de_legion', null), null, ['chef_de_legion']), false)
+})
+
+test('global team staff can see team overview only with current team membership', () => {
+  for (const slug of TEAM_OVERVIEW_ROLES) {
+    assert.equal(hasCurrentTeamRole(assigned(slug, null), 'team-1'), true, slug)
+    assert.equal(hasCurrentTeamRole(assigned(slug, null), null), false, slug)
+  }
+  assert.equal(hasCurrentTeamRole(assigned('equipier', null), 'team-1'), false)
 })

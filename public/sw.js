@@ -1,4 +1,4 @@
-const VERSION = 'v1.2.0-r135'
+const VERSION = 'v1.2.0-r146'
 const CACHE_PREFIX = 'scoutsvm-'
 const CORE_CACHE = `${CACHE_PREFIX}core-${VERSION}`
 const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${VERSION}`

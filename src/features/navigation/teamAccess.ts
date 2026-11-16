@@ -1,5 +1,7 @@
-/** Navigation-level access to read-only team overview for current-year team staff.
- * Route and database policies remain the authority for all other operations.
+/** Team-scoped navigation for active Scout Year roles.
+ * A global role can operate for the user's currently assigned team; an explicitly
+ * team-scoped role only applies when that team matches the user's current team.
+ * The route guard and database policies remain the final authority for writes.
  */
 export type TeamScopedRole = { role_slug: string; team_id?: string | null }
 
@@ -19,6 +21,9 @@ export function hasCurrentTeamRole(
 ): boolean {
   return Boolean(
     memberTeamId &&
-    roles.some((role) => role.team_id === memberTeamId && allowedRoles.includes(role.role_slug)),
+    roles.some((role) =>
+      allowedRoles.includes(role.role_slug) &&
+      (role.team_id === memberTeamId || role.team_id === null || role.team_id === undefined)
+    ),
   )
 }
