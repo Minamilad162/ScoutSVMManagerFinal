@@ -38,6 +38,9 @@ jobs:
           npm run test:best-chefs-year
           npm run test:reservations
 
+      - name: Material booking role-scope regression tests
+        run: npm run test:material-booking
+
       - name: TypeScript typecheck
         run: npm run typecheck
 
