@@ -389,7 +389,8 @@ export default function AdminMembers() {
     if (!ensureSelectedYearEditable()) return
     if (!chefFullName.trim()) return toast.error('أدخل الاسم')
     if (!selectedUser) return toast.error('اختر مستخدم (Auth user)')
-    if (selectedTeamRoles.length && !chefTeamId) return toast.error('اختر فريقًا فقط للأدوار المرتبطة بفريق، أو ألغِ اختيار Team Role')
+    if (selectedTeamRoles.length && !chefTeamId) return toast.error('اختر فريقًا للأدوار التي حددتها على الفريق المختار')
+    if (chefTeamId && !teams.some((team) => team.id === chefTeamId)) return toast.error('الفريق المحدد غير موجود، أعد اختيار الفريق')
 
     setSavingChef(true)
     try {
@@ -798,18 +799,6 @@ export default function AdminMembers() {
               <input className="border rounded-xl p-2 w-full" value={chefPhone} onChange={(e) => setChefPhone(e.target.value)} placeholder="010..." />
             </div>
             <div className="min-w-0">
-              <label className="text-sm">الفريق <span className="text-slate-400">(اختياري)</span></label>
-              <select className="border rounded-xl p-2 w-full cursor-pointer" value={chefTeamId} onChange={(e) => setChefTeamId(e.target.value)}>
-                <option value="">— بدون فريق —</option>
-                {teams.length === 0 && <option value="" disabled>لا توجد فرق مفعلة</option>}
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="min-w-0">
               <label className="text-sm">الرتبة <span className="text-slate-400">(اختياري)</span></label>
               <select className="border rounded-xl p-2 w-full cursor-pointer" value={chefRankId as any} onChange={(e) => setChefRankId(e.target.value ? Number(e.target.value) : '')}>
                 <option value="">— بدون رتبة —</option>
@@ -898,8 +887,41 @@ export default function AdminMembers() {
             </div>
           </div>
 
-          <div className="mt-4">
-            <div className="text-sm font-semibold mb-1">الأدوار ونطاقها</div>
+          <div className="mt-4 space-y-3">
+            <div className="rounded-2xl border border-sky-200 bg-sky-50/60 p-4">
+              <label htmlFor="new-chef-role-team" className="mb-2 block text-sm font-bold text-slate-900">
+                الفريق المرتبط بالأكونت والأدوار
+                <span className="ms-1 text-xs font-normal text-slate-500">(اختياري للأدوار العامة)</span>
+              </label>
+              <select
+                id="new-chef-role-team"
+                className="w-full cursor-pointer rounded-xl border border-sky-300 bg-white px-3 py-3 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                value={chefTeamId}
+                onChange={(e) => setChefTeamId(e.target.value)}
+                aria-describedby="new-chef-role-team-help"
+              >
+                <option value="">— اختر الفريق أو اتركه بدون فريق —</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>{team.name}</option>
+                ))}
+              </select>
+              <p id="new-chef-role-team-help" className="mt-2 text-xs leading-6 text-slate-600">
+                الفريق المختار سيُحفظ في بيانات العضو للسنة الكشفية {selectedYear?.name || 'المختارة'}،
+                وتُطبّق عليه الأدوار المحددة في عمود «على الفريق المختار». الأدوار العامة لا تتطلب اختيار فريق.
+              </p>
+              {selectedTeamRoles.length > 0 && !chefTeamId ? (
+                <InlineAlert tone="warning" title="حدد الفريق للأدوار المختارة">
+                  اختر فريقًا من القائمة أعلاه قبل الحفظ، أو ألغِ تحديد الأدوار الموجودة في عمود «على الفريق المختار».
+                </InlineAlert>
+              ) : null}
+              {chefTeamId ? (
+                <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">
+                  الفريق المحدد: {teams.find((team) => team.id === chefTeamId)?.name || '—'}
+                  {selectedTeamRoles.length > 0 ? ` · ${selectedTeamRoles.length} دور مرتبط بالفريق` : ''}
+                </div>
+              ) : null}
+            </div>
+            <div className="text-sm font-semibold">الأدوار ونطاقها</div>
             <div className="border rounded-2xl overflow-x-auto">
               <table className="w-full text-sm min-w-[560px] md:min-w-0">
                 <thead className="bg-gray-50">
