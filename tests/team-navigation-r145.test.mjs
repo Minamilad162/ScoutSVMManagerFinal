@@ -1,0 +1,48 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { hasCurrentTeamRole, TEAM_OVERVIEW_ROLES } from '../src/features/navigation/teamAccess.ts'
+
+const root = new URL('../', import.meta.url)
+const nav = readFileSync(new URL('src/components/SideNav.tsx', root), 'utf8')
+const routes = readFileSync(new URL('src/App.tsx', root), 'utf8')
+const guards = readFileSync(new URL('src/components/RouteAccessGuard.tsx', root), 'utf8')
+const assigned = (slug, teamId) => [{ role_slug: slug, team_id: teamId }]
+
+test('read-only team overview for all active scoped staff roles, including normal chefs', () => {
+  for (const slug of TEAM_OVERVIEW_ROLES) {
+    assert.equal(hasCurrentTeamRole(assigned(slug, 'team-1'), 'team-1'), true, slug)
+    assert.equal(hasCurrentTeamRole(assigned(slug, 'team-2'), 'team-1'), false, slug)
+    assert.equal(hasCurrentTeamRole(assigned(slug, null), 'team-1'), false, slug)
+  }
+  assert.equal(hasCurrentTeamRole(assigned('equipier', 'team-1'), 'team-1'), false)
+  assert.equal(hasCurrentTeamRole(assigned('responsable_finance', 'team-1'), null), false)
+})
+
+test('menu and RouteAccessGuard use identical team overview permission helper', () => {
+  assert.match(nav, /canViewTeamOverview = hasCurrentTeamRole\(roles, myTeamId\)/)
+  assert.match(nav, /if \(canViewTeamOverview\) \{[\s\S]*?\/app\/TeamStatistics/)
+  assert.match(routes, /TeamStatistics" element=\{<RouteAccessGuard anyTeamRoles=\{TEAM_OVERVIEW_ROLES\} globalRoles=/)
+  assert.match(guards, /const hasTeamScopedRole = hasCurrentTeamRole\(roles, myTeamId, anyTeamRoles\)/)
+})
+
+test('leader-only evaluation and attendance stay role guarded', () => {
+  assert.match(routes, /LegionEvaluations" element=\{<RouteAccessGuard anyRoles=\{\['chef_de_legion'\]\}/)
+  assert.match(routes, /LegionAttendance" element=\{<RouteAccessGuard anyRoles=\{\['chef_de_legion'\]\}/)
+  assert.match(nav, /if \(hasChefTeam\) \{[\s\S]*?\/app\/LegionEvaluations/)
+})
+
+test('global management is not exposed by a team-scoped responsibility', () => {
+  assert.match(nav, /if \(isGlobalSecretary\) \{[\s\S]*?\/app\/AdminSecretary/)
+  assert.match(nav, /if \(hasTeamSecretary\) \{[\s\S]*?\/app\/TeamSecretary/)
+  assert.doesNotMatch(nav.slice(nav.indexOf("if (hasTeamSecretary)"), nav.indexOf("if (showDelegatedCampProgram)")), /\/app\/AdminSecretary/)
+  assert.match(routes, /AdminSecretary" element=\{<RouteAccessGuard globalRoles=\{\['responsable_secretary'\]\}/)
+  assert.match(routes, /AdminFinance" element=\{<RouteAccessGuard globalRoles=\{\['responsable_finance'\]\}/)
+  assert.match(routes, /MaterialAdmin" element=\{<RouteAccessGuard globalRoles=\{\['responsable_materials'\]\}/)
+})
+
+test('team secretary sees minutes and tasks, material staff see tools catalog', () => {
+  assert.match(nav, /if \(hasTeamSecretary\) \{[\s\S]*?\/app\/meeting-minutes'[\s\S]*?\/app\/meeting-tasks'/)
+  assert.match(nav, /if \(hasTeamMaterials \|\| isGlobalMaterials\) \{[\s\S]*?\/app\/materials'/)
+  assert.match(nav, /if \(isGlobalSecretary\) \{[\s\S]*?\/app\/AdminDashboard/)
+})

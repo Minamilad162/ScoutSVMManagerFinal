@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './components/AuthProvider'
 import { ScoutYearProvider, useScoutYear } from './components/ScoutYearProvider'
 import { PageLoader } from './components/ui/PageLoader'
 import { RouteAccessGuard } from './components/RouteAccessGuard'
+import { TEAM_OVERVIEW_ROLES } from './features/navigation/teamAccess'
 import scoutSvmOfficialLogo from './assets/brand/scout-svm-official-logo.webp'
 import { ensurePushSubscription } from './lib/pushNotifications'
 
@@ -412,7 +413,7 @@ export default function App() {
               <Route path="AdminDashboard" element={<RouteAccessGuard globalRoles={['responsable_secretary']}><AdminDashboard /></RouteAccessGuard>} />
               <Route path="storage" element={<StorageInventory />} />
               <Route path="TeamCases" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><TeamCases /></RouteAccessGuard>} />
-              <Route path="TeamStatistics" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><TeamStatistics /></RouteAccessGuard>} />
+              <Route path="TeamStatistics" element={<RouteAccessGuard anyTeamRoles={TEAM_OVERVIEW_ROLES} globalRoles={['responsable_secretary']}><TeamStatistics /></RouteAccessGuard>} />
               <Route path="meeting-minutes" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><MeetingMinutesList /></RouteAccessGuard>} />
               <Route path="meeting-minutes/new" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><MeetingMinuteForm /></RouteAccessGuard>} />
               <Route path="meeting-minutes/:id" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><MeetingMinuteForm /></RouteAccessGuard>} />
@@ -435,7 +436,7 @@ export default function App() {
               <Route path="best-chefs" element={<BestChefsGallery />} />
               <Route path="AdminEvalQuestions" element={<RouteAccessGuard adminOnly><AdminEvalQuestions /></RouteAccessGuard>} />
               <Route path="AdminFinance" element={<RouteAccessGuard globalRoles={['responsable_finance']}><AdminFinance /></RouteAccessGuard>} />
-              <Route path="AdminSecretary" element={<RouteAccessGuard anyRoles={['responsable_secretary']}><AdminSecretary /></RouteAccessGuard>} />
+              <Route path="AdminSecretary" element={<RouteAccessGuard globalRoles={['responsable_secretary']}><AdminSecretary /></RouteAccessGuard>} />
               <Route path="TeamSecretaryAttendance" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><TeamSecretaryAttendance /></RouteAccessGuard>} />
               <Route path="AdminEvents" element={<RouteAccessGuard adminOnly><AdminEvents /></RouteAccessGuard>} />
               <Route path="ChefsEvaluationOverview" element={<RouteAccessGuard anyRoles={['chef_de_legion']} globalRoles={['responsable_secretary']}><ChefsEvaluationOverview /></RouteAccessGuard>} />

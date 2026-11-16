@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { SHOW_EVALUATION_QUESTIONS } from '../features/evaluations/config'
+import { hasCurrentTeamRole } from '../features/navigation/teamAccess'
 import { useAuth } from './AuthProvider'
 import { useScoutYear } from './ScoutYearProvider'
 import { supabase } from '../lib/supabase'
@@ -15,7 +16,7 @@ const IMAGES_URL = 'https://drive.google.com/drive/folders/13wB3GMbm8CTxKLNomKB_
 type Props = { onNavigate?: () => void }
 
 export default function SideNav({ onNavigate }: Props) {
-  const { roles, user } = useAuth()
+  const { roles, user, myTeamId } = useAuth()
   const { currentScoutYear } = useScoutYear()
   const location = useLocation()
 
@@ -224,7 +225,6 @@ export default function SideNav({ onNavigate }: Props) {
 
   // ===== Roles / Nav items =====
   const isAdmin = roles.some((r: RoleRow) => r.role_slug === 'admin')
-  const has = (slug: string) => roles.some((r: RoleRow) => r.role_slug === slug)
 
   const isGlobalSecretary = roles.some(
     (r: RoleRow) =>
@@ -244,11 +244,13 @@ export default function SideNav({ onNavigate }: Props) {
       (r.team_id === null || r.team_id === undefined)
   )
 
-  const hasTeamSecretary = roles.some(
-    (r: RoleRow) =>
-      r.role_slug === 'responsable_secretary' &&
-      (r.team_id !== null && r.team_id !== undefined)
-  )
+  // Team operations follow the user's active scout-year membership, not an
+  // unrelated role from another team or a global-only responsibility.
+  const hasChefTeam = hasCurrentTeamRole(roles, myTeamId, ['chef_de_legion'])
+  const hasTeamFinance = hasCurrentTeamRole(roles, myTeamId, ['responsable_finance'])
+  const hasTeamMaterials = hasCurrentTeamRole(roles, myTeamId, ['responsable_materials'])
+  const hasTeamSecretary = hasCurrentTeamRole(roles, myTeamId, ['responsable_secretary'])
+  const canViewTeamOverview = hasCurrentTeamRole(roles, myTeamId)
 
   const pushUnique = (arr: Item[], to: string, label: string) => {
     if (!to) return
@@ -303,10 +305,15 @@ export default function SideNav({ onNavigate }: Props) {
       pushUnique(res, '/app/reports-center', 'مركز التقارير')
       pushUnique(res, '/app/my-camp-collections', 'تحصيل المعسكرات')
     } else {
-      if (has('chef_de_legion')) {
+      // Team overview is read-only; editing/evaluation routes retain their own
+      // role checks. This keeps the menu useful for Normal Chef and team leads.
+      if (canViewTeamOverview) {
+        pushUnique(res, '/app/TeamStatistics', 'إحصائيات الفريق')
+      }
+
+      if (hasChefTeam) {
         pushUnique(res, '/app/LegionEvaluations', 'تقييم فريقي')
         pushUnique(res, '/app/TeamCases', 'ملاحظات الفريق')
-        pushUnique(res, '/app/TeamStatistics', 'إحصائيات الفريق')
         pushUnique(res, '/app/meeting-minutes', 'المحاضر')
         pushUnique(res, '/app/meeting-tasks', 'متابعة التاسكات')
         pushUnique(res, '/app/camp-installments', 'التقسيط')
@@ -325,13 +332,14 @@ export default function SideNav({ onNavigate }: Props) {
         pushUnique(res, '/app/financeEvent', 'ميزانية المجموعة')
       }
 
-      if (has('responsable_finance')) {
-        pushUnique(res, '/app/TeamFinance', 'ميزانية فريقى')
+      if (hasTeamFinance) {
+        pushUnique(res, '/app/TeamFinance', 'ميزانية فريقي')
       }
 
-      if (has('responsable_materials')) {
-        pushUnique(res, '/app/FieldReservationsTeam', 'حجز الارض')
+      if (hasTeamMaterials || isGlobalMaterials) {
+        pushUnique(res, '/app/FieldReservationsTeam', 'حجز الأرض')
         pushUnique(res, '/app/MaterialTeamReservation', 'حجز الأدوات')
+        pushUnique(res, '/app/materials', 'الأدوات')
       }
 
       const materialTeamIds = new Set(
@@ -355,15 +363,15 @@ export default function SideNav({ onNavigate }: Props) {
       }
 
       if (isGlobalSecretary) {
+        pushUnique(res, '/app/AdminDashboard', 'لوحة التحكم')
         pushUnique(res, '/app/AdminSecretary', 'إدارة السكرتارية')
-        pushUnique(res, '/app/TeamSecretary', 'سكرتارية فريقي')
-        pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي')
-      } else if (hasTeamSecretary) {
-        pushUnique(res, '/app/AdminSecretary', 'متابعة سكرتارية الفريق')
+      }
+      if (hasTeamSecretary) {
         pushUnique(res, '/app/TeamSecretary', 'سكرتارية فريقي')
         pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي')
         pushUnique(res, '/app/TeamCases', 'ملاحظات الفريق')
-        pushUnique(res, '/app/TeamStatistics', 'إحصائيات الفريق')
+        pushUnique(res, '/app/meeting-minutes', 'المحاضر')
+        pushUnique(res, '/app/meeting-tasks', 'متابعة التاسكات')
       }
     }
 
@@ -389,6 +397,11 @@ export default function SideNav({ onNavigate }: Props) {
     isGlobalFinance,
     isGlobalMaterials,
     hasTeamSecretary,
+    hasChefTeam,
+    hasTeamFinance,
+    hasTeamMaterials,
+    canViewTeamOverview,
+    myTeamId,
     showCollectorCollections,
     showDelegatedCampProgram,
   ])
