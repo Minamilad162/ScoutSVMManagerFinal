@@ -69,7 +69,7 @@ assert(scoutYearsApi.includes("supabase.rpc('set_current_scout_year_atomic'"), '
 assert(!scoutYearsApi.includes(".update({ is_current: false"), 'Legacy non-atomic current-year reset remains in Scout Year API')
 
 // PWA cache invalidation.
-assert(sw.includes("const VERSION = 'v1.2.0-r135'"), 'Service worker release cache version was not bumped')
+assert(sw.includes("const VERSION = 'v1.2.0-r146'"), 'Service worker release cache version was not bumped')
 assert(sw.includes('staleWhileRevalidate'), 'Service worker stable public assets are not refreshed')
 assert(main.includes("updateViaCache: 'none'"), 'Service worker registration can still be satisfied from stale HTTP cache')
 
