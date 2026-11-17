@@ -20,5 +20,5 @@ FROM public.scout_years
 WHERE is_current IS TRUE;
 
 -- View the currently deployed helper; compare it to the migration.
-SELECT pg_get_functiondef('public.material_booking_can_write(uuid)'::regprocedure)
+SELECT pg_get_functiondef(to_regprocedure('public.material_booking_can_write(uuid)'))
 WHERE to_regprocedure('public.material_booking_can_write(uuid)') IS NOT NULL;
