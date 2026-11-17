@@ -111,7 +111,7 @@ function MaterialGlyph({ category }: { category: Exclude<MaterialCategory, 'all'
 }
 
 export default function MaterialsTeamReservations() {
-  const { roles } = useAuth()
+  const { roles, myTeamId } = useAuth()
   const { currentScoutYear, isReadOnlyView } = useScoutYear()
   const yearBounds = getScoutYearBounds(currentScoutYear)
   const toast = useToast()
@@ -137,15 +137,15 @@ export default function MaterialsTeamReservations() {
   const [showAllTeamBookings, setShowAllTeamBookings] = useState(false)
 
   const canSelectAnyTeam = canManageMaterialBookingsAcrossTeams(roles)
-  const bookableTeams = useMemo(() => materialBookableTeams(roles, teams), [roles, teams])
+  const bookableTeams = useMemo(() => materialBookableTeams(roles, teams, myTeamId), [roles, teams, myTeamId])
   const termMeta = useMemo(() => terms.find((t) => t.id === termId) || null, [terms, termId])
   const termBounds = termMeta ? getTermYearBounds(currentScoutYear, termMeta) : null
   const termMinDT = termBounds ? `${termBounds.start}T00:00` : undefined
   const termMaxDT = termBounds ? `${termBounds.end}T23:59` : undefined
   const selectedMaterial = useMemo(() => materials.find((m) => m.id === matId) || null, [materials, matId])
   const teamName = teams.find((t) => t.id === teamId)?.name || 'الفريق'
-  const canBook = canBookMaterialsForTeam(roles, teamId, isReadOnlyView)
-  const bookingPermissionMessage = materialBookingPermissionMessage({ roles, teamId, isReadOnlyView })
+  const canBook = canBookMaterialsForTeam(roles, teamId, isReadOnlyView, myTeamId)
+  const bookingPermissionMessage = materialBookingPermissionMessage({ roles, teamId, isReadOnlyView, currentMemberTeamId: myTeamId })
 
   const effectiveFilterDay = useMemo(() => (startAt ? startAt.slice(0, 10) : ''), [startAt])
   const listFiltered = useMemo(() => {
@@ -368,6 +368,14 @@ export default function MaterialsTeamReservations() {
 
     setSaving(true)
     try {
+      // Confirm database RLS is ready *before* attempting the INSERT.
+      // This catches missing migrations and stale seasonal role assignments.
+      const { data: allowedByDatabase, error: scopeError } = await supabase.rpc('material_booking_can_write', { p_team: teamId })
+      if (scopeError) throw scopeError
+      if (allowedByDatabase !== true) {
+        throw new Error('قاعدة البيانات لا تسمح بالحجز لهذا الفريق. راجع أدوار السنة الكشفية الحالية وتطبيق Migration 30.')
+      }
+
       const { error } = await supabase.from('material_reservations').insert({
         team_id: teamId,
         material_id: matId,
@@ -380,7 +388,16 @@ export default function MaterialsTeamReservations() {
       setQty(1)
       await Promise.all([refreshList(), refreshDayReservations(), computeAvailability()])
     } catch (e: any) {
-      toast.error(e.message || 'تعذر الحجز (قد تكون الكمية غير متاحة)')
+      const raw = String(e?.message || '')
+      const isMissingHelper = e?.code === 'PGRST202' || /material_booking_can_write.*(not found|schema cache)/i.test(raw)
+      const isRlsDenied = e?.code === '42501' || /row-level security policy/i.test(raw)
+      if (isMissingHelper) {
+        toast.error('تحديث قاعدة بيانات حجز الأدوات غير مطبق. يجب تشغيل Migration 30 من Supabase SQL Editor.')
+      } else if (isRlsDenied) {
+        toast.error('تم رفض حجز الأداة بسبب صلاحيات قاعدة البيانات. راجع فريق الحساب ودوره النشط ثم طبّق Migration 30 إذا لم تكن مطبقة.')
+      } else {
+        toast.error(raw || 'تعذر الحجز (قد تكون الكمية غير متاحة)')
+      }
     } finally {
       setSaving(false)
     }

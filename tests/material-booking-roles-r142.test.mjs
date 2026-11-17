@@ -59,3 +59,38 @@ test('SQL migration uses scoped current-year RLS on INSERT/UPDATE', () => {
   assert.match(s, /CREATE POLICY "material bookings active role update"/)
   assert.doesNotMatch(s, /DISABLE ROW LEVEL SECURITY|TRUNCATE|DELETE FROM public\.material_reservations/)
 })
+
+test('global Chef de legion can reserve only their own current-year team', () => {
+  const chefGlobal = [{ role_slug: 'chef_de_legion', team_id: null }]
+  assert.equal(canBookMaterialsForTeam(chefGlobal, 'advanced', false, 'advanced'), true)
+  assert.equal(canBookMaterialsForTeam(chefGlobal, 'ashbal', false, 'advanced'), false)
+  assert.equal(canBookMaterialsForTeam(chefGlobal, 'advanced', false, null), false)
+  assert.deepEqual(materialBookableTeams(chefGlobal, teams, 'advanced').map(t => t.id), ['advanced'])
+  assert.equal(preferredMaterialBookingTeamId(chefGlobal, teams, 'advanced'), 'advanced')
+  assert.equal(canBookMaterialsForTeam(chefGlobal, 'advanced', true, 'advanced'), false)
+})
+
+test('migration 30 repairs RLS without disabling protections or changing existing reservations', () => {
+  const script = readFileSync(new URL('../supabase/30_material_reservations_insert_rls_fix.sql', import.meta.url), 'utf8')
+  assert.match(script, /sy\.is_current IS TRUE/)
+  assert.match(script, /msa\.is_active IS TRUE/)
+  assert.match(script, /ura\.is_active IS TRUE/)
+  assert.match(script, /ura\.team_id IS NULL AND msa\.team_id = p_team/)
+  assert.match(script, /r\.role_slug = 'responsable_materials'/)
+  assert.match(script, /r\.role_slug = 'chef_de_legion'/)
+  assert.match(script, /CREATE POLICY "material bookings active role insert"/)
+  assert.match(script, /WITH CHECK \(public\.material_booking_can_write\(team_id\)\)/)
+  assert.match(script, /DROP POLICY IF EXISTS "matres modify by team"/)
+  assert.match(script, /REVOKE ALL ON FUNCTION public\.material_booking_can_write\(uuid\) FROM PUBLIC/)
+  assert.doesNotMatch(script, /DISABLE ROW LEVEL SECURITY|TRUNCATE|DELETE FROM public\.material_reservations/i)
+})
+
+test('UI checks the actual database policy before confirming material reservation', () => {
+  const page = readFileSync(new URL('../src/pages/MaterialsTeamReservations.tsx', import.meta.url), 'utf8')
+  const rpcIndex = page.indexOf("supabase.rpc('material_booking_can_write'")
+  const insertIndex = page.indexOf("supabase.from('material_reservations').insert(")
+  assert.ok(rpcIndex >= 0 && insertIndex > rpcIndex)
+  assert.match(page, /if \(allowedByDatabase !== true\)/)
+  assert.match(page, /e\?\.code === '42501'/)
+  assert.match(page, /Migration 30/)
+})
