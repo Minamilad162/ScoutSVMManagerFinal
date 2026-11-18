@@ -42,3 +42,11 @@ test('missing zones/meetings produce actionable errors',()=>{
   assert.match(fieldBookingUnavailableReason({...base,hasZone:false}),/قطاعات/)
   assert.match(fieldBookingUnavailableReason(base),/اجتماعات/)
 })
+
+test('global Chef de legion has own-year team booking permission, not cross-team access', () => {
+  const roles = [{ role_slug: 'chef_de_legion', team_id: null }]
+  assert.equal(canBookFieldForTeam(roles, 'team-a', 'team-a', false), true)
+  assert.equal(canBookFieldForTeam(roles, 'team-b', 'team-a', false), false)
+  assert.equal(canBookFieldForTeam(roles, 'team-a', '', false), false)
+  assert.equal(canBookFieldForTeam(roles, 'team-a', 'team-a', true), false)
+})
