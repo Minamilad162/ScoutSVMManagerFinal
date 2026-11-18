@@ -31,7 +31,7 @@ export function canBookFieldForTeam(
   if (!memberTeamId || teamId !== memberTeamId) return false
   return roles.some(({ role_slug, team_id }) =>
     (role_slug === 'chef_de_legion' || role_slug === 'responsable_materials')
-    && (team_id === teamId || (role_slug === 'responsable_materials' && team_id == null))
+    && (team_id === teamId || team_id == null)
   )
 }
 

@@ -265,6 +265,16 @@ export default function FieldReservationsTeam() {
 
     setSaving(true)
     try {
+      // Confirm actual server-side booking entitlement before any write.
+      // Database RLS remains the authority; a missing helper means Migration 31 is needed.
+      const { data: databaseAllowsBooking, error: bookingScopeError } = await supabase.rpc(
+        'field_booking_can_write', { p_team: teamId }
+      )
+      if (bookingScopeError) throw bookingScopeError
+      if (databaseAllowsBooking !== true) {
+        throw new Error('قاعدة البيانات لا تسمح لحسابك بحجز الأرض لهذا الفريق في السنة الكشفية الحالية. راجع أدوار الحساب وMigration 31.')
+      }
+
       // Booking must not create/update a meeting: materials staff can reserve
       // their team's field but are not entitled to write the meetings table.
       const { data: mrow, error: me } = await supabase.from('meetings')
@@ -324,7 +334,16 @@ export default function FieldReservationsTeam() {
       await refreshTeamDayReservations()
       await refreshDayReservations() // ← تحدّث جدول “حجوزات هذا التاريخ”
     } catch (e: any) {
-      toast.error(e.message || 'تعذر الحجز')
+      const message = String(e?.message || '')
+      const isMissingRlsHelper = e?.code === 'PGRST202' || /field_booking_can_write.*(not found|schema cache)/i.test(message)
+      const isRlsRejection = e?.code === '42501' || /row-level security policy/i.test(message)
+      if (isMissingRlsHelper) {
+        toast.error('تحديث صلاحيات حجز الأرض ناقص في قاعدة البيانات. راجع فحص الحجز وMigration 31.')
+      } else if (isRlsRejection) {
+        toast.error('قاعدة البيانات رفضت حجز الأرض لهذا الفريق. تأكد من دورك والفريق والسنة الحالية وسياسات RLS.')
+      } else {
+        toast.error(message || 'تعذر الحجز')
+      }
     } finally {
       setSaving(false)
     }
