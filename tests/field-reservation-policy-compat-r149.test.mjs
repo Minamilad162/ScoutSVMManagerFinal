@@ -37,7 +37,7 @@ test('RLS always checks current-year active membership and team roles', () => {
 test('does not alter prior reservations or disable security', () => {
   assert.doesNotMatch(sql, /DISABLE ROW LEVEL SECURITY|TRUNCATE|DELETE FROM public\.field_reservations/i)
   assert.match(sql, /ALTER TABLE public\.field_reservations ENABLE ROW LEVEL SECURITY/)
-  assert.match(sql, /missing tables: %/)
+  assert.match(sql, /required tables missing: %/)
   assert.match(sql, /missing columns: %/)
   assert.match(sql, /expected exactly one current Scout Year/)
 })
