@@ -4,7 +4,7 @@ import { AuthProvider, useAuth } from './components/AuthProvider'
 import { ScoutYearProvider, useScoutYear } from './components/ScoutYearProvider'
 import { PageLoader } from './components/ui/PageLoader'
 import { RouteAccessGuard } from './components/RouteAccessGuard'
-import { TEAM_OVERVIEW_ROLES } from './features/navigation/teamAccess'
+import { getMobileShortcuts, TEAM_OVERVIEW_ROLES, type MobileShortcutIcon } from './features/navigation/teamAccess'
 import scoutSvmOfficialLogo from './assets/brand/scout-svm-official-logo.webp'
 import { ensurePushSubscription } from './lib/pushNotifications'
 
@@ -151,17 +151,29 @@ function ScrollTopButton() {
   )
 }
 
-function MobileNavGlyph({ type }: { type: 'home' | 'bell' | 'profile' | 'more' }) {
+function MobileNavGlyph({ type }: { type: 'home' | 'profile' | 'more' | MobileShortcutIcon }) {
   const common = { width: 21, height: 21, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
   if (type === 'home') return <svg {...common}><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
   if (type === 'bell') return <svg {...common}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
   if (type === 'profile') return <svg {...common}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+  if (type === 'attendance') return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>
+  if (type === 'secretary') return <svg {...common}><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M9 10h6M9 14h6M9 17h4"/></svg>
+  if (type === 'finance') return <svg {...common}><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M15 15h3"/></svg>
+  if (type === 'tools') return <svg {...common}><path d="M3 9h18v10H3zM8 9V5h8v4M3 13h18M10 13v2h4v-2"/></svg>
+  if (type === 'field') return <svg {...common}><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M12 5v14"/><circle cx="12" cy="12" r="3"/></svg>
+  if (type === 'dashboard') return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+  if (type === 'book') return <svg {...common}><path d="M12 5v15M12 5c-4-3-7-3-9-2v15c3-1 6 0 9 2 3-2 6-3 9-2V3c-2-1-5-1-9 2Z"/></svg>
+  if (type === 'images') return <svg {...common}><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg>
+  if (type === 'statistics') return <svg {...common}><path d="M4 19h16M7 16V9M12 16V5M17 16v-4"/></svg>
+  if (type === 'calendar') return <svg {...common}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18m6 5 2 2 4-4"/></svg>
   return <svg {...common}><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
 }
 
 function MobileBottomNav({ onMore, moreOpen }: { onMore: () => void; moreOpen: boolean }) {
+  const { roles, myTeamId } = useAuth()
+  const shortcuts = getMobileShortcuts(roles, myTeamId)
   return (
-    <nav className="mobile-bottom-nav" aria-label="التنقل الرئيسي على الموبايل">
+    <nav className="mobile-bottom-nav" data-columns={3 + shortcuts.length} aria-label="التنقل الرئيسي على الموبايل">
       <NavLink to="/app" end className={({ isActive }) => `mobile-bottom-item ${isActive ? 'is-active' : ''}`}>
         <span className="mobile-bottom-icon"><MobileNavGlyph type="home" /></span>
         <span>الرئيسية</span>
@@ -170,10 +182,17 @@ function MobileBottomNav({ onMore, moreOpen }: { onMore: () => void; moreOpen: b
         <span className="mobile-bottom-icon"><MobileNavGlyph type="profile" /></span>
         <span>ملفي</span>
       </NavLink>
-      <NavLink to="/app/notifications" className={({ isActive }) => `mobile-bottom-item ${isActive ? 'is-active' : ''}`}>
-        <span className="mobile-bottom-icon"><MobileNavGlyph type="bell" /></span>
-        <span>الإشعارات</span>
-      </NavLink>
+      {shortcuts.map((shortcut) => {
+        const content = <>
+          <span className="mobile-bottom-icon"><MobileNavGlyph type={shortcut.icon} /></span>
+          <span>{shortcut.label}</span>
+        </>
+        return shortcut.external ? (
+          <a key={shortcut.to} href={shortcut.to} target="_blank" rel="noreferrer" className="mobile-bottom-item" aria-label={shortcut.label}>{content}</a>
+        ) : (
+          <NavLink key={shortcut.to} to={shortcut.to} end className={({ isActive }) => `mobile-bottom-item ${isActive ? 'is-active' : ''}`} aria-label={shortcut.label}>{content}</NavLink>
+        )
+      })}
       <button
         type="button"
         className={`mobile-bottom-item ${moreOpen ? 'is-active' : ''}`}
