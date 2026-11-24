@@ -27,3 +27,9 @@ export function hasCurrentTeamRole(
     ),
   )
 }
+
+/** Navigation entitlement comes from active-year roles; team scope is still
+ * checked by operational pages and RLS, never inferred from a menu link. */
+export function hasChefNavigationRole(roles: readonly TeamScopedRole[]): boolean {
+  return roles.some(role => role.role_slug === 'chef_de_legion')
+}

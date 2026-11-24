@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { hasCurrentTeamRole, TEAM_OVERVIEW_ROLES } from '../src/features/navigation/teamAccess.ts'
+import { hasChefNavigationRole, hasCurrentTeamRole, TEAM_OVERVIEW_ROLES } from '../src/features/navigation/teamAccess.ts'
 
 const root = new URL('../', import.meta.url)
 const nav = readFileSync(new URL('src/components/SideNav.tsx', root), 'utf8')
@@ -63,19 +63,31 @@ test('global team staff can see team overview only with current team membership'
 })
 
 test('Chef-only menu has exactly the approved internal links in order', () => {
-  const block = nav.match(/if \(isChefOnly\) \{\s*return \[([\s\S]*?)\]\s*\}/)
+  const block = nav.match(/const chefItems: Item\[\] = \[([\s\S]*?)\]\s*if \(isChefOnly\) return chefItems/)
   assert.ok(block)
   const paths = [...block[1].matchAll(/to: '([^']+)'/g)].map(match => match[1])
   assert.deepEqual(paths, ["/app/member-profile","/app/best-chefs","/app/reservations-overview","/app/materials","/app/meeting-minutes","/app/LegionAttendance","/app/TeamCases","/app/TeamStatistics","/app/FieldReservationsTeam","/app/TeamFinance","/app/MaterialTeamReservation","/app/TeamSecretary","/app/TeamSecretaryAttendance","/app/storage","/app/notifications"])
-  assert.match(nav, /const isChefOnly = !isAdmin && hasChefTeam/)
+  assert.match(nav, /const isChefOnly = !isAdmin && hasChefRole/)
   assert.match(nav, /roles\.every\(\(role: RoleRow\) => \['chef_de_legion', 'normal_chef'\]/)
   assert.match(nav, /href=\{PROGRAM_URL\}/)
   assert.match(nav, /href=\{IMAGES_URL\}/)
 })
 
 test('Chef reservation link is overview-only; admin direct management remains restricted', () => {
-  assert.match(routes, /path="reservations-overview" element=\{<RouteAccessGuard anyTeamRoles=\{\['chef_de_legion'\]\}><ReservationsOverview \/>/)
+  assert.match(routes, /path="reservations-overview" element=\{<RouteAccessGuard anyRoles=\{\['chef_de_legion'\]\}><ReservationsOverview \/>/)
   assert.match(routes, /path="reservation" element=\{<RouteAccessGuard adminOnly><ReservationsDirectManage \/>/)
   assert.match(routes, /path="admin-best-chefs" element=\{<RouteAccessGuard adminOnly>/)
-  assert.match(routes, /path="materials" element=\{<RouteAccessGuard anyRoles=\{\['responsable_materials'\]\} anyTeamRoles=\{\['chef_de_legion'\]\}/)
+  assert.match(routes, /path="materials" element=\{<RouteAccessGuard anyRoles=\{\['responsable_materials', 'chef_de_legion'\]\}/)
+})
+
+test('Chef menu entitlement does not depend on a member team or role team match', () => {
+  for (const teamId of [null, 'team-1', 'team-2']) {
+    assert.equal(hasChefNavigationRole(assigned('chef_de_legion', teamId)), true)
+  }
+  assert.equal(hasChefNavigationRole(assigned('normal_chef', 'team-1')), false)
+  assert.equal(hasChefNavigationRole([]), false)
+  assert.equal(hasChefNavigationRole([...assigned('normal_chef', 'team-1'), ...assigned('chef_de_legion', 'team-2')]), true)
+  assert.match(nav, /const hasChefRole = hasChefNavigationRole\(roles\)/)
+  assert.match(nav, /if \(hasChefRole\) \{\s*for \(const item of chefItems\)/)
+  assert.match(routes, /TeamStatistics" element=\{<RouteAccessGuard anyTeamRoles=\{TEAM_OVERVIEW_ROLES\} globalRoles=\{\['responsable_secretary'\]\} anyRoles=\{\['chef_de_legion'\]\}/)
 })

@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { SHOW_EVALUATION_QUESTIONS } from '../features/evaluations/config'
-import { hasCurrentTeamRole } from '../features/navigation/teamAccess'
+import { hasChefNavigationRole, hasCurrentTeamRole } from '../features/navigation/teamAccess'
 import { useAuth } from './AuthProvider'
 import { useScoutYear } from './ScoutYearProvider'
 import { supabase } from '../lib/supabase'
@@ -247,6 +247,7 @@ export default function SideNav({ onNavigate }: Props) {
   // Team operations follow the user's active scout-year membership, not an
   // unrelated role from another team or a global-only responsibility.
   const hasChefTeam = hasCurrentTeamRole(roles, myTeamId, ['chef_de_legion'])
+  const hasChefRole = hasChefNavigationRole(roles)
   const hasTeamFinance = hasCurrentTeamRole(roles, myTeamId, ['responsable_finance'])
   const hasTeamMaterials = hasCurrentTeamRole(roles, myTeamId, ['responsable_materials'])
   const hasTeamSecretary = hasCurrentTeamRole(roles, myTeamId, ['responsable_secretary'])
@@ -260,12 +261,11 @@ export default function SideNav({ onNavigate }: Props) {
   const items = useMemo<Item[]>(() => {
     if (!user) return []
 
-    // Exact menu for a current-year team leader with no additional responsibility.
-    // Normal Chef is a baseline role, not an additional management responsibility.
-    const isChefOnly = !isAdmin && hasChefTeam &&
+    // Active role determines menu visibility even if the member team is missing
+    // or differs from the role assignment. Data access remains scoped by RLS.
+    const isChefOnly = !isAdmin && hasChefRole &&
       roles.every((role: RoleRow) => ['chef_de_legion', 'normal_chef'].includes(role.role_slug))
-    if (isChefOnly) {
-      return [
+    const chefItems: Item[] = [
         { to: '/app/member-profile', label: 'ملفي الشخصي' },
         { to: '/app/best-chefs', label: 'أفضل الـ chefs' },
         { to: '/app/reservations-overview', label: 'الحجوزات' },
@@ -281,8 +281,8 @@ export default function SideNav({ onNavigate }: Props) {
         { to: '/app/TeamSecretaryAttendance', label: 'غياب فريقي (سكرتارية)' },
         { to: '/app/storage', label: 'أماكن العهدة' },
         { to: '/app/notifications', label: 'الإشعارات' },
-      ]
-    }
+    ]
+    if (isChefOnly) return chefItems
 
     const res: Item[] = [{ to: '/app', label: 'الرئيسية' }, { to: '/app/member-profile', label: 'ملفي الشخصي' }, { to: '/app/best-chefs', label: 'أفضل الـ chefs' }]
 
@@ -333,6 +333,10 @@ export default function SideNav({ onNavigate }: Props) {
       // role checks. This keeps the menu useful for Normal Chef and team leads.
       if (canViewTeamOverview) {
         pushUnique(res, '/app/TeamStatistics', 'إحصائيات الفريق')
+      }
+
+      if (hasChefRole) {
+        for (const item of chefItems) pushUnique(res, item.to, item.label)
       }
 
       if (hasChefTeam) {
@@ -425,6 +429,7 @@ export default function SideNav({ onNavigate }: Props) {
     isGlobalMaterials,
     hasTeamSecretary,
     hasChefTeam,
+    hasChefRole,
     hasTeamFinance,
     hasTeamMaterials,
     canViewTeamOverview,
