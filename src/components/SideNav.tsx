@@ -271,6 +271,7 @@ export default function SideNav({ onNavigate }: Props) {
         { to: '/app/reservations-overview', label: 'الحجوزات' },
         { to: '/app/materials', label: 'الأدوات' },
         { to: '/app/meeting-minutes', label: 'المحاضر' },
+        { to: '/app/meeting-tasks', label: 'متابعة التاسكات' },
         { to: '/app/LegionAttendance', label: 'غياب فريقي' },
         { to: '/app/TeamCases', label: 'ملاحظات الفريق' },
         { to: '/app/TeamStatistics', label: 'إحصائيات الفريق' },
@@ -401,8 +402,6 @@ export default function SideNav({ onNavigate }: Props) {
         pushUnique(res, '/app/TeamSecretary', 'سكرتارية فريقي')
         pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي')
         pushUnique(res, '/app/TeamCases', 'ملاحظات الفريق')
-        pushUnique(res, '/app/meeting-minutes', 'المحاضر')
-        pushUnique(res, '/app/meeting-tasks', 'متابعة التاسكات')
       }
     }
 
