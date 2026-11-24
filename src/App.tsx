@@ -405,7 +405,7 @@ export default function App() {
               <Route path="MaterialAdmin" element={<RouteAccessGuard globalRoles={['responsable_materials']}><MaterialsAdmin /></RouteAccessGuard>} />
               <Route path="AdminAttendance" element={<RouteAccessGuard adminOnly><AdminAttendance /></RouteAccessGuard>} />
               <Route path="AdminReservationsAll" element={<RouteAccessGuard adminOnly><ReservationsOverview /></RouteAccessGuard>} />
-              <Route path="reservations-overview" element={<RouteAccessGuard anyTeamRoles={['chef_de_legion']}><ReservationsOverview /></RouteAccessGuard>} />
+              <Route path="reservations-overview" element={<RouteAccessGuard anyRoles={['chef_de_legion']}><ReservationsOverview /></RouteAccessGuard>} />
               <Route path="AdminFieldReservations" element={<RouteAccessGuard sameTeamRoles={['responsable_materials', 'chef_de_legion']}><AdminFieldReservations /></RouteAccessGuard>} />
               <Route path="AdminEvaluations" element={<RouteAccessGuard adminOnly><AdminEvaluations /></RouteAccessGuard>} />
               <Route path="LegionEvaluations" element={<RouteAccessGuard anyRoles={['chef_de_legion']}><LegionEvaluations /></RouteAccessGuard>} />
@@ -415,7 +415,7 @@ export default function App() {
               <Route path="AdminDashboard" element={<RouteAccessGuard globalRoles={['responsable_secretary']}><AdminDashboard /></RouteAccessGuard>} />
               <Route path="storage" element={<StorageInventory />} />
               <Route path="TeamCases" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><TeamCases /></RouteAccessGuard>} />
-              <Route path="TeamStatistics" element={<RouteAccessGuard anyTeamRoles={TEAM_OVERVIEW_ROLES} globalRoles={['responsable_secretary']}><TeamStatistics /></RouteAccessGuard>} />
+              <Route path="TeamStatistics" element={<RouteAccessGuard anyTeamRoles={TEAM_OVERVIEW_ROLES} globalRoles={['responsable_secretary']} anyRoles={['chef_de_legion']}><TeamStatistics /></RouteAccessGuard>} />
               <Route path="meeting-minutes" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><MeetingMinutesList /></RouteAccessGuard>} />
               <Route path="meeting-minutes/new" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><MeetingMinuteForm /></RouteAccessGuard>} />
               <Route path="meeting-minutes/:id" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_secretary']}><MeetingMinuteForm /></RouteAccessGuard>} />
@@ -446,7 +446,7 @@ export default function App() {
               <Route path="TeamFinance" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_finance']}><TeamFinance /></RouteAccessGuard>} />
               <Route path="evaluation" element={<MyEvaluation />} />
               <Route path="FieldReservationsTeam" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_materials']}><FieldReservationsTeam /></RouteAccessGuard>} />
-              <Route path="materials" element={<RouteAccessGuard anyRoles={['responsable_materials']} anyTeamRoles={['chef_de_legion']}><Materials /></RouteAccessGuard>} />
+              <Route path="materials" element={<RouteAccessGuard anyRoles={['responsable_materials', 'chef_de_legion']}><Materials /></RouteAccessGuard>} />
               <Route path="reservation" element={<RouteAccessGuard adminOnly><ReservationsDirectManage /></RouteAccessGuard>} />
               <Route path="admin-members" element={<RouteAccessGuard adminOnly><AdminMembers /></RouteAccessGuard>} />
               <Route path="notifications" element={<Notifications />} />
