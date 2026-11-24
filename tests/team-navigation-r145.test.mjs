@@ -61,3 +61,21 @@ test('global team staff can see team overview only with current team membership'
   }
   assert.equal(hasCurrentTeamRole(assigned('equipier', null), 'team-1'), false)
 })
+
+test('Chef-only menu has exactly the approved internal links in order', () => {
+  const block = nav.match(/if \(isChefOnly\) \{\s*return \[([\s\S]*?)\]\s*\}/)
+  assert.ok(block)
+  const paths = [...block[1].matchAll(/to: '([^']+)'/g)].map(match => match[1])
+  assert.deepEqual(paths, ["/app/member-profile","/app/best-chefs","/app/reservations-overview","/app/materials","/app/meeting-minutes","/app/LegionAttendance","/app/TeamCases","/app/TeamStatistics","/app/FieldReservationsTeam","/app/TeamFinance","/app/MaterialTeamReservation","/app/TeamSecretary","/app/TeamSecretaryAttendance","/app/storage","/app/notifications"])
+  assert.match(nav, /const isChefOnly = !isAdmin && hasChefTeam/)
+  assert.match(nav, /roles\.every\(\(role: RoleRow\) => \['chef_de_legion', 'normal_chef'\]/)
+  assert.match(nav, /href=\{PROGRAM_URL\}/)
+  assert.match(nav, /href=\{IMAGES_URL\}/)
+})
+
+test('Chef reservation link is overview-only; admin direct management remains restricted', () => {
+  assert.match(routes, /path="reservations-overview" element=\{<RouteAccessGuard anyTeamRoles=\{\['chef_de_legion'\]\}><ReservationsOverview \/>/)
+  assert.match(routes, /path="reservation" element=\{<RouteAccessGuard adminOnly><ReservationsDirectManage \/>/)
+  assert.match(routes, /path="admin-best-chefs" element=\{<RouteAccessGuard adminOnly>/)
+  assert.match(routes, /path="materials" element=\{<RouteAccessGuard anyRoles=\{\['responsable_materials'\]\} anyTeamRoles=\{\['chef_de_legion'\]\}/)
+})
