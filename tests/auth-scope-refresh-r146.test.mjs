@@ -27,3 +27,9 @@ test('refresh signs out only for confirmed inactive membership, not transient er
   assert.match(scope, /if \(!snapshot\.allowed\) \{[\s\S]*?blockInactiveAccount/)
   assert.doesNotMatch(scope.slice(scope.indexOf('} catch (error)')), /blockInactiveAccount/)
 })
+
+test('admission does not duplicate profile requests or clear the admitted role snapshot', () => {
+  assert.doesNotMatch(auth, /AuthProvider\.loadProfile/)
+  assert.match(auth, /applyAllowedSnapshot\(nextUser, snapshot\)/)
+  assert.match(auth, /const refreshScope = async/)
+})
