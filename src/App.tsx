@@ -246,6 +246,10 @@ function ProtectedLayout() {
   const isAdmin = roles.some((role) => role.role_slug === 'admin')
   const loc = useLocation()
   const [navOpen, setNavOpen] = useState(false)
+  // Opening the menu is also a fresh authorization check, not a role write.
+  useEffect(() => {
+    if (navOpen && user?.id) window.dispatchEvent(new Event('scoutsvm:roles-changed'))
+  }, [navOpen, user?.id])
   const pageTitle = useMemo(() => getPageLabel(loc.pathname), [loc.pathname])
   const routeStateKey = `${loc.pathname}${loc.search}|${currentScoutYear?.id || 'no-year'}`
   useRouteScrollMemory(routeStateKey)

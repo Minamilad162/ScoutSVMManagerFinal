@@ -91,3 +91,12 @@ test('Chef menu entitlement does not depend on a member team or role team match'
   assert.match(nav, /if \(hasChefRole\) \{\s*for \(const item of chefItems\)/)
   assert.match(routes, /TeamStatistics" element=\{<RouteAccessGuard anyTeamRoles=\{TEAM_OVERVIEW_ROLES\} globalRoles=\{\['responsable_secretary'\]\} anyRoles=\{\['chef_de_legion'\]\}/)
 })
+
+test('global media plus scoped secretary exposes own-team secretary links without global management', () => {
+  const roles = [...assigned('responsable_media', null), ...assigned('responsable_secretary', 'team-1')]
+  assert.equal(hasCurrentTeamRole(roles, 'team-1'), true)
+  assert.equal(hasCurrentTeamRole(roles, 'team-1', ['responsable_secretary']), true)
+  assert.equal(hasCurrentTeamRole(roles, 'team-2', ['responsable_secretary']), false)
+  assert.equal(roles.some(r => r.role_slug === 'responsable_secretary' && r.team_id === null), false)
+  assert.equal(hasChefNavigationRole(roles), false)
+})

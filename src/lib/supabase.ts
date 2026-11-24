@@ -12,6 +12,7 @@ let scoutYearViewReadOnly = false
 
 const HISTORICAL_READ_RPC_ALLOWLIST = new Set([
   'attendance_stats',
+  'has_role',
   'material_available_qty',
   'material_reservations_by_day_all',
   'search_auth_users',
@@ -66,7 +67,11 @@ const contextAwareFetch: typeof fetch = async (input, init) => {
     }
   }
 
-  return fetch(input, { ...init, headers })
+  // Authorization reads must not reuse a browser HTTP cache entry from an
+  // earlier role assignment. Other application reads retain existing behavior.
+  const isAccessRead = method === 'GET' &&
+    /\/rest\/v1\/(v_user_roles_current|v_members_current)(?:\?|$)/.test(url)
+  return fetch(input, { ...init, headers, ...(isAccessRead ? { cache: 'no-store' as const } : {}) })
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
