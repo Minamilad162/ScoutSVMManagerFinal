@@ -510,6 +510,7 @@ export default function AdminMembers() {
         delta: { after: { full_name: chefFullName.trim(), team_id: chefTeamId || null, rank_id: chefRankId === '' ? null : chefRankId, is_equipier: false, auth_user_id: selectedUser.id } },
       })
 
+      if (isSelectedCurrentYear) window.dispatchEvent(new Event('scoutsvm:roles-changed'))
       toast.success(existing ? 'تم ربط الأكونت بالسنة المختارة وتحديث بياناته' : 'تم إضافة الأكونت للسنة المختارة')
       setChefFullName(''); setChefPhone(''); setUserSearch(''); setUserResults([]); setSelectedUser(null)
       setSelectedGlobal([]); setSelectedTeamRoles([]); setChefAvatar(null)
@@ -651,6 +652,7 @@ export default function AdminMembers() {
           return
         }
       }
+      if (isSelectedCurrentYear) window.dispatchEvent(new Event('scoutsvm:roles-changed'))
       toast.success(confirmed ? 'تم حفظ البيانات وإضافة صلاحية قائد الفريق' : 'تم حفظ بيانات العضو داخل السنة المختارة')
       await reload()
     } catch (e: any) {
@@ -683,6 +685,7 @@ export default function AdminMembers() {
         createdBy: user?.id ?? null,
         syncLegacy: isSelectedCurrentYear,
       })
+      if (isSelectedCurrentYear) window.dispatchEvent(new Event('scoutsvm:roles-changed'))
       toast.success('تمت إضافة الدور داخل السنة المختارة')
       setNewRoleId('')
       setNewRoleScope('global')
@@ -709,6 +712,7 @@ export default function AdminMembers() {
         teamId: role.team_id,
         syncLegacy: isSelectedCurrentYear,
       })
+      if (isSelectedCurrentYear) window.dispatchEvent(new Event('scoutsvm:roles-changed'))
       toast.success('تم حذف الدور من السنة المختارة')
       await reload()
     } catch (e: any) {
