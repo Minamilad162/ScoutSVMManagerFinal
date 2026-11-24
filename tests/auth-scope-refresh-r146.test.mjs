@@ -33,3 +33,17 @@ test('admission does not duplicate profile requests or clear the admitted role s
   assert.match(auth, /applyAllowedSnapshot\(nextUser, snapshot\)/)
   assert.match(auth, /const refreshScope = async/)
 })
+
+const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const client = readFileSync(new URL('../src/lib/supabase.ts', import.meta.url), 'utf8')
+const members = readFileSync(new URL('../src/pages/AdminMembers.tsx', import.meta.url), 'utf8')
+test('opening navigation and reconnecting refresh the existing authorized session', () => {
+  assert.match(app, /if \(navOpen && user\?\.id\) window\.dispatchEvent\(new Event\('scoutsvm:roles-changed'\)\)/)
+  assert.match(auth, /const onRoleUpdate = \(\) => \{ void refreshScope\(true\) \}/)
+  assert.match(auth, /window\.addEventListener\('online', onOnline\)/)
+  assert.match(auth, /window\.removeEventListener\('online', onOnline\)/)
+  assert.match(client, /v_user_roles_current\|v_members_current/)
+  assert.match(client, /cache: 'no-store'/)
+  assert.match(client, /'has_role',/)
+  assert.match(members, /if \(isSelectedCurrentYear\) window\.dispatchEvent\(new Event\('scoutsvm:roles-changed'\)\)/)
+})
