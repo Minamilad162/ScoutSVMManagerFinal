@@ -60,3 +60,22 @@ test('Chef rank repair is an explicit admin action for the saved team and select
   assert.match(source, /const confirmChefRole = wantsChefRole && window\.confirm/)
   assert.match(rosterApi, /else if \(existingSeason\.is_active !== true\)[\s\S]*?\.update\(\{ is_active: true \}\)/)
 })
+
+test('Legacy Admin role editor uses the same year-scoped assignment API', () => {
+  const admin = readFileSync(new URL('../src/pages/Admin.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(admin, /from\('user_roles'\)\.insert/)
+  assert.match(admin, /await addCurrentSeasonRole\(\{[\s\S]*?scoutYearId: yearId,[\s\S]*?syncLegacy: isCurrent/)
+  assert.match(admin, /await fetchSeasonRoles\(yearId, mem.auth_user_id\)/)
+  assert.match(admin, /currentScoutYear\?\.status !== 'draft'/)
+})
+test('Bulk repair only copies active current-year roles to missing legacy rows', () => {
+  const repair = readFileSync(new URL('../supabase/ROLE_SYNC_CURRENT_YEAR_REPAIR.sql', import.meta.url), 'utf8')
+  assert.match(repair, /sy\.is_current is true/)
+  assert.match(repair, /ura\.is_active is true and r\.role_slug <> 'admin'/)
+  assert.match(repair, /msa\.is_active is true/)
+  assert.match(repair, /ts\.is_active is true/)
+  assert.match(repair, /ur\.team_id is not distinct from e\.team_id/)
+  assert.match(repair, /insert into public\.user_roles/)
+  assert.doesNotMatch(repair, /delete from|insert into public\.user_role_assignments/i)
+  assert.match(repair, /PASS_R153_ELIGIBLE_ROLE_SYNC/)
+})

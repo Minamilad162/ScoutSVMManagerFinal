@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { scoutYearFrom, supabase } from '../lib/supabase'
 import { fetchTerms } from '../features/reference/api'
+import { addCurrentSeasonRole, fetchSeasonRoles } from '../features/scoutYears/adminRosterApi'
 import { getScoutYearBounds, getTermYearBounds, inDateBounds } from '../lib/scoutYearScope'
 import { useAuth } from '../components/AuthProvider'
 import { useScoutYear } from '../components/ScoutYearProvider'
@@ -24,8 +25,8 @@ type TeamLink = { id: string; team_id: string; kind: 'images'|'program'; url: st
 type TermDateRow = { id: string; meeting_date: string }
 
 export default function Admin() {
-  const { roles } = useAuth()
-  const { currentScoutYear } = useScoutYear()
+  const { roles, user } = useAuth()
+  const { currentScoutYear, actualCurrentScoutYear } = useScoutYear()
   const isAdmin = useMemo(() => roles.some(r => r.role_slug === 'admin'), [roles])
   const [tab, setTab] = useState<'members'|'roles'|'terms'|'field'|'links'|'stats'>('members')
   const [msg, setMsg] = useState<string | null>(null)
@@ -215,15 +216,36 @@ export default function Admin() {
     const mem = members.find(m => m.id === selectedMemberId)
     if (!mem?.auth_user_id) { setErr('العضو ليس له حساب (auth_user_id)'); return }
     if (assignRoleId === '') { setErr('اختر الدور'); return }
-    const payload: any = {
-      user_id: mem.auth_user_id,
-      role_id: Number(assignRoleId),
-      team_id: assignTeamId || null
+    const yearId = currentScoutYear?.id
+    const isCurrent = Boolean(yearId && yearId === actualCurrentScoutYear?.id)
+    if (!isAdmin || !yearId || (!isCurrent && currentScoutYear?.status !== 'draft')) {
+      setErr('تعيين الأدوار متاح للأدمن في السنة الحالية أو سنة قيد التجهيز فقط')
+      return
     }
-    const { error } = await supabase.from('user_roles').insert(payload).single()
-    if (error) { setErr(error.message); return }
-    setMsg('تم تعيين الدور')
-    await loadMemberRoles(selectedMemberId)
+    try {
+      const { data: membership, error: memberError } = await supabase
+        .from('member_season_assignments').select('member_id')
+        .eq('scout_year_id', yearId).eq('member_id', mem.id).eq('is_active', true).maybeSingle()
+      if (memberError) throw memberError
+      if (!membership) throw new Error('العضو غير نشط في السنة المختارة')
+      await addCurrentSeasonRole({
+        scoutYearId: yearId,
+        userId: mem.auth_user_id,
+        roleId: Number(assignRoleId),
+        teamId: assignTeamId || null,
+        createdBy: user?.id ?? null,
+        syncLegacy: isCurrent,
+      })
+      const assigned = await fetchSeasonRoles(yearId, mem.auth_user_id)
+      if (!assigned.some(role => role.role_id === Number(assignRoleId) && role.team_id === (assignTeamId || null) && role.is_active)) {
+        throw new Error('لم يتم التحقق من تعيين الدور للسنة المختارة')
+      }
+      window.dispatchEvent(new Event('scoutsvm:roles-changed'))
+      setMsg('تم تعيين الدور للسنة المختارة')
+      await loadMemberRoles(selectedMemberId)
+    } catch (error: any) {
+      setErr(error?.message || 'تعذر تعيين الدور')
+    }
   }
 
   // ========== Terms ==========
