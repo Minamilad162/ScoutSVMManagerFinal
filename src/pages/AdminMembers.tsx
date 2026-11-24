@@ -16,6 +16,7 @@ import { useSeasonAdminData } from '../hooks/useSeasonAdminData'
 import { listScoutYears, type ScoutYearRow } from '../features/scoutYears/api'
 import {
   addCurrentSeasonRole,
+  fetchSeasonRoles,
   removeCurrentSeasonRole,
   upsertCurrentSeasonMemberAssignment,
   type CurrentSeasonMember,
@@ -355,6 +356,11 @@ export default function AdminMembers() {
     return seasonRoles.filter((role) => role.user_id === selectedManagedMember.auth_user_id)
   }, [seasonRoles, selectedManagedMember])
 
+  const chefRole = roleCatalogBySlug.get('chef_de_legion')
+  const savedChefRank = selectedManagedMember?.rank_slug === 'chef_de_legion'
+  const savedChefTeam = selectedManagedMember?.team_id || null
+  const needsSavedChefRole = Boolean(selectedManagedMember?.scout_year_id === selectedYearId && selectedManagedMember?.auth_user_id && selectedManagedMember.is_active && !selectedManagedMember.is_equipier && savedChefRank && savedChefTeam && !selectedManagedRoles.some(role => role.role_slug === 'chef_de_legion' && role.is_active && (role.team_id === savedChefTeam || role.team_id === null)))
+
   useEffect(() => {
     if (!selectedManagedMember) {
       setSeasonTeamId('')
@@ -405,6 +411,13 @@ export default function AdminMembers() {
     if (!selectedUser) return toast.error('اختر مستخدم (Auth user)')
     if (selectedTeamRoles.length && !chefTeamId) return toast.error('اختر فريقًا للأدوار التي حددتها على الفريق المختار')
     if (chefTeamId && !teams.some((team) => team.id === chefTeamId)) return toast.error('الفريق المحدد غير موجود، أعد اختيار الفريق')
+
+    const wantsChefRole = ranks.some(rank => rank.id === chefRankId && rank.rank_slug === 'chef_de_legion')
+      && Boolean(chefTeamId) && !selectedGlobal.includes('chef_de_legion') && !selectedTeamRoles.includes('chef_de_legion')
+    const confirmChefRole = wantsChefRole && window.confirm(
+      'الرتبة المختارة Chef de legion. هل تريد إضافة صلاحية قائد الفريق على الفريق المحدد في هذه السنة؟'
+    )
+    if (confirmChefRole && !chefRole) return toast.error('صلاحية Chef de legion غير موجودة في دليل الأدوار')
 
     setSavingChef(true)
     try {
@@ -468,6 +481,8 @@ export default function AdminMembers() {
         if (selectedGlobal.includes(choice.slug)) requestedRoles.push({ roleId: role.id, teamId: null })
         if (selectedTeamRoles.includes(choice.slug) && chefTeamId) requestedRoles.push({ roleId: role.id, teamId: chefTeamId })
       })
+
+      if (confirmChefRole && chefRole) requestedRoles.push({ roleId: chefRole.id, teamId: chefTeamId })
 
       for (const role of requestedRoles) {
         await addCurrentSeasonRole({
@@ -565,10 +580,55 @@ export default function AdminMembers() {
     }
   }
 
+  // Never infer privileges from rank at login. Only an explicit admin action
+  // creates the actual, year-scoped role using the existing audited API.
+  async function grantChefTeamRole(targetUserId: string, targetTeamId: string) {
+    if (!isAdmin || !chefRole || !selectedYearId || !canEditSelectedYear || !targetTeamId) {
+      throw new Error('تعذر إضافة صلاحية قائد الفريق: تحقق من السنة والفريق ودليل الأدوار')
+    }
+    await addCurrentSeasonRole({
+      scoutYearId: selectedYearId,
+      userId: targetUserId,
+      roleId: chefRole.id,
+      teamId: targetTeamId,
+      createdBy: user?.id ?? null,
+      syncLegacy: isSelectedCurrentYear,
+    })
+    const verified = await fetchSeasonRoles(selectedYearId, targetUserId)
+    if (!verified.some(role => role.role_id === chefRole.id && role.team_id === targetTeamId && role.is_active)) {
+      throw new Error('لم يتم التحقق من إضافة صلاحية قائد الفريق')
+    }
+    window.dispatchEvent(new Event('scoutsvm:roles-changed'))
+  }
+
+  async function repairSavedChefRole() {
+    if (!isAdmin || !ensureSelectedYearEditable() || !needsSavedChefRole || !selectedManagedMember?.auth_user_id || !savedChefTeam || roleActionBusy || savingSeasonMember || loading || error) return
+    if (!window.confirm(`إضافة صلاحية Chef de legion لـ ${selectedManagedMember.full_name} على فريق ${selectedManagedMember.team_name || savedChefTeam} في السنة المختارة فقط؟`)) return
+    setRoleActionBusy(true)
+    try {
+      await grantChefTeamRole(selectedManagedMember.auth_user_id, savedChefTeam)
+      toast.success('تمت إضافة صلاحية قائد الفريق والتحقق منها')
+    } catch (e: any) {
+      toast.error(e.message || 'تعذر إضافة صلاحية قائد الفريق')
+    } finally {
+      await reload()
+      setRoleActionBusy(false)
+    }
+  }
+
   async function saveSeasonMemberState() {
     if (!selectedManagedMember) return toast.error('اختر عضوًا أولًا')
     if (!selectedYearId) return toast.error('اختر السنة الكشفية أولًا')
     if (!ensureSelectedYearEditable()) return
+
+    if (!isAdmin || loading || error || roleActionBusy || savingSeasonMember || selectedManagedMember.scout_year_id !== selectedYearId) return
+    const rankIsChef = ranks.some(rank => rank.id === seasonRankId && rank.rank_slug === 'chef_de_legion')
+    const missingRole = rankIsChef && seasonIsActive && !seasonIsEquipier && Boolean(seasonTeamId && selectedManagedMember.auth_user_id)
+      && !selectedManagedRoles.some(role => role.role_slug === 'chef_de_legion' && role.is_active && (role.team_id === seasonTeamId || role.team_id === null))
+    const confirmed = missingRole && window.confirm(
+      `هل تريد إضافة صلاحية Chef de legion لـ ${selectedManagedMember.full_name} على فريق ${teams.find(team => team.id === seasonTeamId)?.name || seasonTeamId} في السنة المختارة؟`
+    )
+    if (confirmed && !chefRole) return toast.error('صلاحية Chef de legion غير موجودة في دليل الأدوار')
 
     setSavingSeasonMember(true)
     try {
@@ -582,7 +642,16 @@ export default function AdminMembers() {
         seasonNotes: selectedManagedMember.season_notes,
         syncLegacy: isSelectedCurrentYear,
       })
-      toast.success('تم حفظ بيانات العضو داخل السنة المختارة')
+      if (confirmed && selectedManagedMember.auth_user_id && seasonTeamId) {
+        try {
+          await grantChefTeamRole(selectedManagedMember.auth_user_id, seasonTeamId)
+        } catch (e: any) {
+          toast.error('تم حفظ بيانات العضو، لكن تعذر إضافة أو التحقق من صلاحية القائد: ' + (e.message || 'خطأ غير معروف'))
+          await reload()
+          return
+        }
+      }
+      toast.success(confirmed ? 'تم حفظ البيانات وإضافة صلاحية قائد الفريق' : 'تم حفظ بيانات العضو داخل السنة المختارة')
       await reload()
     } catch (e: any) {
       toast.error(e.message || 'تعذر حفظ بيانات السنة المختارة')
@@ -1259,10 +1328,21 @@ export default function AdminMembers() {
                 </div>
 
                 <div className="flex justify-end">
-                  <LoadingButton loading={savingSeasonMember} onClick={saveSeasonMemberState} disabled={!canEditSelectedYear}>
+                  <LoadingButton loading={savingSeasonMember} onClick={saveSeasonMemberState} disabled={!canEditSelectedYear || roleActionBusy || loading || Boolean(error)}>
                     حفظ بيانات السنة المختارة
                   </LoadingButton>
                 </div>
+
+                {needsSavedChefRole && (
+                  <InlineAlert tone="warning" title="رتبة قائد الفريق موجودة ولكن الصلاحية غير مضافة">
+                    <div className="space-y-2">
+                      <p>الرتبة وحدها لا تمنح الوصول للصفحات. أضف صلاحية Chef de legion على فريق {selectedManagedMember.team_name || savedChefTeam} لهذه السنة، دون حذف أي دور آخر.</p>
+                      <LoadingButton loading={roleActionBusy} disabled={!canEditSelectedYear || !chefRole || savingSeasonMember || loading || Boolean(error)} onClick={repairSavedChefRole}>
+                        إضافة صلاحية قائد الفريق
+                      </LoadingButton>
+                    </div>
+                  </InlineAlert>
+                )}
 
                 <div className="border-t border-slate-200 pt-4">
                   <div className="mb-1 text-sm font-semibold text-slate-700">أدوار السنة المختارة <span className="font-normal text-slate-400">(اختياري)</span></div>

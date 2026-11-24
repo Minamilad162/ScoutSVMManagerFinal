@@ -48,3 +48,15 @@ test('selected account prompts for name without inventing it from email', () => 
   assert.match(source, /ولا يُستخرج تلقائيًا من البريد الإلكتروني/)
   assert.doesNotMatch(source, /setChefFullName\(selectedUser\.email/)
 })
+
+const rosterApi = readFileSync(new URL('../src/features/scoutYears/adminRosterApi.ts', import.meta.url), 'utf8')
+test('Chef rank repair is an explicit admin action for the saved team and selected year', () => {
+  assert.match(source, /const savedChefRank = selectedManagedMember\?\.rank_slug === 'chef_de_legion'/)
+  assert.match(source, /const needsSavedChefRole = Boolean\(selectedManagedMember\?\.scout_year_id === selectedYearId/)
+  assert.match(source, /async function repairSavedChefRole\(\)[\s\S]*?window\.confirm[\s\S]*?grantChefTeamRole\(selectedManagedMember\.auth_user_id, savedChefTeam\)/)
+  assert.match(source, /async function grantChefTeamRole[\s\S]*?scoutYearId: selectedYearId,[\s\S]*?teamId: targetTeamId,[\s\S]*?fetchSeasonRoles\(selectedYearId, targetUserId\)/)
+  assert.match(source, /onClick=\{repairSavedChefRole\}/)
+  assert.match(source, /const confirmed = missingRole && window\.confirm/)
+  assert.match(source, /const confirmChefRole = wantsChefRole && window\.confirm/)
+  assert.match(rosterApi, /else if \(existingSeason\.is_active !== true\)[\s\S]*?\.update\(\{ is_active: true \}\)/)
+})
