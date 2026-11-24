@@ -206,42 +206,9 @@ export function AuthProvider({ children }: { children: any }) {
     }
   }, [])
 
-  useEffect(() => {
-    const userId = user?.id ?? null
-
-    const load = async () => {
-      if (!userId) {
-        setRoles([])
-        setMyTeamId(null)
-        setAuthError(null)
-        setLoading(false)
-        return
-      }
-
-      try {
-        setAuthError(null)
-        const snapshot = await fetchAccessSnapshot(userId)
-
-        if (!snapshot.allowed) {
-          await blockInactiveAccount(snapshot.reason || INACTIVE_REASON)
-          return
-        }
-
-        setRoles(snapshot.roles)
-        setMyTeamId(snapshot.myTeamId)
-        lastScopeRefreshAtRef.current = Date.now()
-        setAccountInactive(false)
-        setAccountInactiveReason(null)
-      } catch (error) {
-        logError('AuthProvider.loadProfile', error as any, { userId })
-        setAuthError(getErrorMessage(error as any, 'تعذر تحميل بيانات الحساب'))
-        setRoles([])
-        setMyTeamId(null)
-      }
-    }
-
-    void load()
-  }, [user?.id])
+  // Every admission path already loads the current-year access snapshot.
+  // Do not duplicate that request after setUser: a transient second failure
+  // must not replace an admitted user's valid roles with an empty array.
 
   // Admin role/team changes can happen in another browser session. Refresh the
   // current-year authorization snapshot when this tab becomes active again.
