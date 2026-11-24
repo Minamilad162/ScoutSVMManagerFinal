@@ -372,7 +372,7 @@ export async function addCurrentSeasonRole(payload: {
 
   let seasonLookup = supabase
     .from('user_role_assignments')
-    .select('id')
+    .select('id,is_active')
     .eq('scout_year_id', payload.scoutYearId)
     .eq('user_id', payload.userId)
     .eq('role_id', payload.roleId) as any
@@ -391,6 +391,16 @@ export async function addCurrentSeasonRole(payload: {
       is_active: true,
       created_by: payload.createdBy ?? null,
     })
+    if (error) throw error
+  } else if (existingSeason.is_active !== true) {
+    // Explicitly re-adding a disabled role must activate the same assignment.
+    const { error } = await supabase.from('user_role_assignments')
+      .update({ is_active: true })
+      .eq('id', existingSeason.id)
+      .eq('scout_year_id', payload.scoutYearId)
+      .eq('user_id', payload.userId)
+      .select('id')
+      .single()
     if (error) throw error
   }
 
