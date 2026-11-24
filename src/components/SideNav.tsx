@@ -260,6 +260,30 @@ export default function SideNav({ onNavigate }: Props) {
   const items = useMemo<Item[]>(() => {
     if (!user) return []
 
+    // Exact menu for a current-year team leader with no additional responsibility.
+    // Normal Chef is a baseline role, not an additional management responsibility.
+    const isChefOnly = !isAdmin && hasChefTeam &&
+      roles.every((role: RoleRow) => ['chef_de_legion', 'normal_chef'].includes(role.role_slug))
+    if (isChefOnly) {
+      return [
+        { to: '/app/member-profile', label: 'ملفي الشخصي' },
+        { to: '/app/best-chefs', label: 'أفضل الـ chefs' },
+        { to: '/app/reservations-overview', label: 'الحجوزات' },
+        { to: '/app/materials', label: 'الأدوات' },
+        { to: '/app/meeting-minutes', label: 'المحاضر' },
+        { to: '/app/LegionAttendance', label: 'غياب فريقي' },
+        { to: '/app/TeamCases', label: 'ملاحظات الفريق' },
+        { to: '/app/TeamStatistics', label: 'إحصائيات الفريق' },
+        { to: '/app/FieldReservationsTeam', label: 'حجز الأرض' },
+        { to: '/app/TeamFinance', label: 'ميزانية الفريق' },
+        { to: '/app/MaterialTeamReservation', label: 'حجز الأدوات' },
+        { to: '/app/TeamSecretary', label: 'سكرتارية فريقي' },
+        { to: '/app/TeamSecretaryAttendance', label: 'غياب فريقي (سكرتارية)' },
+        { to: '/app/storage', label: 'أماكن العهدة' },
+        { to: '/app/notifications', label: 'الإشعارات' },
+      ]
+    }
+
     const res: Item[] = [{ to: '/app', label: 'الرئيسية' }, { to: '/app/member-profile', label: 'ملفي الشخصي' }, { to: '/app/best-chefs', label: 'أفضل الـ chefs' }]
 
     if (isAdmin) {
@@ -312,6 +336,9 @@ export default function SideNav({ onNavigate }: Props) {
       }
 
       if (hasChefTeam) {
+        pushUnique(res, '/app/reservations-overview', 'الحجوزات')
+        pushUnique(res, '/app/materials', 'الأدوات')
+        pushUnique(res, '/app/TeamSecretaryAttendance', 'غياب فريقي (سكرتارية)')
         pushUnique(res, '/app/LegionEvaluations', 'تقييم فريقي')
         pushUnique(res, '/app/TeamCases', 'ملاحظات الفريق')
         pushUnique(res, '/app/meeting-minutes', 'المحاضر')
