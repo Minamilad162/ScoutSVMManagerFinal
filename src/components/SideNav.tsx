@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { SHOW_EVALUATION_QUESTIONS } from '../features/evaluations/config'
-import { hasChefNavigationRole, hasCurrentTeamRole } from '../features/navigation/teamAccess'
+import { hasChefNavigationRole, hasCurrentTeamRole, hasGlobalNavigationRole, PROGRAM_URL, IMAGES_URL } from '../features/navigation/teamAccess'
 import { useAuth } from './AuthProvider'
 import { useScoutYear } from './ScoutYearProvider'
 import { supabase } from '../lib/supabase'
@@ -10,8 +10,6 @@ import scoutSvmOfficialLogo from '../assets/brand/scout-svm-official-logo.webp'
 type Item = { to: string; label: string }
 type RoleRow = { role_slug: string; team_id?: string | null }
 
-const PROGRAM_URL = 'https://drive.google.com/drive/folders/10Sr1dGAQLXKfz7ZauyPymnxEC_kaN6FO?usp=sharing'
-const IMAGES_URL = 'https://drive.google.com/drive/folders/13wB3GMbm8CTxKLNomKB_Jr38OD1XjeR2?usp=sharing'
 
 type Props = { onNavigate?: () => void }
 
@@ -226,23 +224,11 @@ export default function SideNav({ onNavigate }: Props) {
   // ===== Roles / Nav items =====
   const isAdmin = roles.some((r: RoleRow) => r.role_slug === 'admin')
 
-  const isGlobalSecretary = roles.some(
-    (r: RoleRow) =>
-      r.role_slug === 'responsable_secretary' &&
-      (r.team_id === null || r.team_id === undefined)
-  )
+  const isGlobalSecretary = hasGlobalNavigationRole(roles, 'responsable_secretary')
 
-  const isGlobalFinance = roles.some(
-    (r: RoleRow) =>
-      r.role_slug === 'responsable_finance' &&
-      (r.team_id === null || r.team_id === undefined)
-  )
+  const isGlobalFinance = hasGlobalNavigationRole(roles, 'responsable_finance')
 
-  const isGlobalMaterials = roles.some(
-    (r: RoleRow) =>
-      r.role_slug === 'responsable_materials' &&
-      (r.team_id === null || r.team_id === undefined)
-  )
+  const isGlobalMaterials = hasGlobalNavigationRole(roles, 'responsable_materials')
 
   // Team operations follow the user's active scout-year membership, not an
   // unrelated role from another team or a global-only responsibility.

@@ -8217,6 +8217,10 @@ body::after { background: radial-gradient(circle, rgba(226,128,45,.08), transpar
     -webkit-backdrop-filter: blur(14px) saturate(130%);
   }
 
+  .mobile-bottom-nav[data-columns="5"] {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+
   .mobile-bottom-item {
     min-height: 56px !important;
     padding: .2rem .12rem !important;

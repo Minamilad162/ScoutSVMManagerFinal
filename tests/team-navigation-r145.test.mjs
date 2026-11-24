@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { hasChefNavigationRole, hasCurrentTeamRole, TEAM_OVERVIEW_ROLES } from '../src/features/navigation/teamAccess.ts'
+import { getMobileShortcuts, hasChefNavigationRole, hasCurrentTeamRole, hasGlobalNavigationRole, PROGRAM_URL, IMAGES_URL, TEAM_OVERVIEW_ROLES } from '../src/features/navigation/teamAccess.ts'
 
 const root = new URL('../', import.meta.url)
 const nav = readFileSync(new URL('src/components/SideNav.tsx', root), 'utf8')
@@ -112,4 +112,53 @@ test('global media plus scoped secretary exposes own-team secretary links withou
   assert.equal(hasCurrentTeamRole(roles, 'team-2', ['responsable_secretary']), false)
   assert.equal(roles.some(r => r.role_slug === 'responsable_secretary' && r.team_id === null), false)
   assert.equal(hasChefNavigationRole(roles), false)
+})
+
+const mobilePaths = (roles, team = 'team-1') => getMobileShortcuts(roles, team).map(item => item.to)
+test('mobile shortcuts follow active team and global responsibility scopes', () => {
+  assert.deepEqual(mobilePaths(assigned('admin', null)), ['/app/AdminDashboard', '/app/AdminAttendance'])
+  assert.deepEqual(mobilePaths(assigned('chef_de_legion', 'team-1')), ['/app/LegionAttendance', '/app/reservations-overview'])
+  assert.deepEqual(mobilePaths(assigned('responsable_secretary', 'team-1')), ['/app/TeamSecretaryAttendance', '/app/TeamSecretary'])
+  assert.deepEqual(mobilePaths(assigned('responsable_secretary', null)), ['/app/AdminSecretary', '/app/TeamSecretaryAttendance'])
+  assert.deepEqual(mobilePaths(assigned('responsable_secretary', null), null), ['/app/AdminSecretary', '/app/AdminDashboard'])
+  assert.deepEqual(mobilePaths(assigned('responsable_finance', 'team-1')), ['/app/TeamFinance'])
+  assert.deepEqual(mobilePaths(assigned('responsable_finance', null)), ['/app/AdminFinance', '/app/financeEvent'])
+  assert.deepEqual(mobilePaths(assigned('responsable_materials', 'team-1')), ['/app/MaterialTeamReservation', '/app/FieldReservationsTeam'])
+  assert.deepEqual(mobilePaths(assigned('responsable_materials', null)), ['/app/MaterialAdmin', '/app/MaterialsReturnApprove'])
+  for (const slug of ['responsable_secretary', 'responsable_finance', 'responsable_materials']) {
+    assert.deepEqual(mobilePaths(assigned(slug, 'team-2')), ['/app/notifications'])
+    assert.deepEqual(mobilePaths(assigned(slug, 'team-1'), null), ['/app/notifications'])
+    assert.equal(hasGlobalNavigationRole(assigned(slug, 'team-1'), slug), false)
+  }
+  assert.deepEqual(mobilePaths(assigned('normal_chef', 'team-1')), ['/app/TeamStatistics'])
+  assert.deepEqual(mobilePaths([]), ['/app/notifications'])
+})
+test('multi-role mobile shortcuts are stable, unique, limited and cover distinct responsibilities', () => {
+  const roles = [...assigned('responsable_secretary', 'team-1'), ...assigned('responsable_finance', 'team-1'), ...assigned('responsable_media', null)]
+  assert.deepEqual(mobilePaths(roles), ['/app/TeamSecretaryAttendance', '/app/TeamFinance'])
+  assert.deepEqual(mobilePaths([...roles].reverse()), mobilePaths(roles))
+  assert.deepEqual(mobilePaths([...assigned('responsable_media', null), ...assigned('responsable_secretary', 'team-1')]), ['/app/TeamSecretaryAttendance', IMAGES_URL])
+  assert.deepEqual(mobilePaths(assigned('responsable_manhag', null)), [PROGRAM_URL])
+  assert.equal(getMobileShortcuts(assigned('responsable_media', null), 'team-1')[0].external, true)
+  assert.deepEqual(mobilePaths([...assigned('admin', null), ...roles]), ['/app/AdminDashboard', '/app/AdminAttendance'])
+  assert.ok(!mobilePaths(roles).some(path => path.includes('meeting-')))
+})
+test('mobile bar preserves home, profile and full menu, with no new routes', () => {
+  const bar = routes.slice(routes.indexOf('function MobileBottomNav'), routes.indexOf('const ROUTE_SCROLL_STORAGE_PREFIX'))
+  assert.match(bar, /getMobileShortcuts\(roles, myTeamId\)/)
+  assert.match(bar, /to="\/app" end/)
+  assert.match(bar, /to="\/app\/member-profile"/)
+  assert.match(bar, /onClick=\{onMore\}/)
+  assert.match(bar, /data-columns=\{3 \+ shortcuts.length\}/)
+  assert.match(nav, /hasGlobalNavigationRole\(roles, 'responsable_secretary'\)/)
+  const css = readFileSync(new URL('src/index.css', root), 'utf8')
+  assert.match(css, /\.mobile-bottom-nav\[data-columns="5"\]/)
+  for (const slug of ['admin', 'chef_de_legion', 'responsable_secretary', 'responsable_finance', 'responsable_materials', 'normal_chef']) {
+    for (const scope of ['team-1', null]) {
+      for (const path of mobilePaths(assigned(slug, scope))) {
+        assert.ok(nav.includes("'" + path + "'"), path + ' exists in sidebar')
+        assert.ok(routes.includes('path="' + path.slice(5) + '"'), path + ' exists in routes')
+      }
+    }
+  }
 })
