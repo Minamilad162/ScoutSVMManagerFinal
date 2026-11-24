@@ -248,12 +248,15 @@ export function AuthProvider({ children }: { children: any }) {
       if (document.visibilityState === 'visible') void refreshScope()
     }
     const onRoleUpdate = () => { void refreshScope(true) }
+    const onOnline = () => { void refreshScope(true) }
 
+    window.addEventListener('online', onOnline)
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('scoutsvm:roles-changed', onRoleUpdate)
     return () => {
       mounted = false
+      window.removeEventListener('online', onOnline)
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('scoutsvm:roles-changed', onRoleUpdate)
