@@ -82,6 +82,7 @@ const PAGE_LABELS: Record<string, string> = {
   '/app/member-profile': 'ملفي الشخصي',
   '/app/best-chefs': 'أفضل الـ chefs',
   '/app/AdminReservationsAll': 'الحجوزات',
+  '/app/reservations-overview': 'الحجوزات',
   '/app/reservation': 'إدارة الحجوزات المباشرة',
   '/app/AdminFieldReservations': 'إدارة الأرض',
   '/app/AdminAttendance': 'إدارة الحضور',
@@ -404,6 +405,7 @@ export default function App() {
               <Route path="MaterialAdmin" element={<RouteAccessGuard globalRoles={['responsable_materials']}><MaterialsAdmin /></RouteAccessGuard>} />
               <Route path="AdminAttendance" element={<RouteAccessGuard adminOnly><AdminAttendance /></RouteAccessGuard>} />
               <Route path="AdminReservationsAll" element={<RouteAccessGuard adminOnly><ReservationsOverview /></RouteAccessGuard>} />
+              <Route path="reservations-overview" element={<RouteAccessGuard anyTeamRoles={['chef_de_legion']}><ReservationsOverview /></RouteAccessGuard>} />
               <Route path="AdminFieldReservations" element={<RouteAccessGuard sameTeamRoles={['responsable_materials', 'chef_de_legion']}><AdminFieldReservations /></RouteAccessGuard>} />
               <Route path="AdminEvaluations" element={<RouteAccessGuard adminOnly><AdminEvaluations /></RouteAccessGuard>} />
               <Route path="LegionEvaluations" element={<RouteAccessGuard anyRoles={['chef_de_legion']}><LegionEvaluations /></RouteAccessGuard>} />
@@ -444,7 +446,7 @@ export default function App() {
               <Route path="TeamFinance" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_finance']}><TeamFinance /></RouteAccessGuard>} />
               <Route path="evaluation" element={<MyEvaluation />} />
               <Route path="FieldReservationsTeam" element={<RouteAccessGuard anyRoles={['chef_de_legion', 'responsable_materials']}><FieldReservationsTeam /></RouteAccessGuard>} />
-              <Route path="materials" element={<RouteAccessGuard anyRoles={['responsable_materials']}><Materials /></RouteAccessGuard>} />
+              <Route path="materials" element={<RouteAccessGuard anyRoles={['responsable_materials']} anyTeamRoles={['chef_de_legion']}><Materials /></RouteAccessGuard>} />
               <Route path="reservation" element={<RouteAccessGuard adminOnly><ReservationsDirectManage /></RouteAccessGuard>} />
               <Route path="admin-members" element={<RouteAccessGuard adminOnly><AdminMembers /></RouteAccessGuard>} />
               <Route path="notifications" element={<Notifications />} />
